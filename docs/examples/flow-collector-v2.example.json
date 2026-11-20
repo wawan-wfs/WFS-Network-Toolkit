@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "bind": "192.0.2.50:4739",
+  "exporters": [
+    {
+      "id": "edge-hq",
+      "exporter": "192.0.2.1",
+      "site": "Kantor Utama",
+      "vrf": "kantor",
+      "wan_ifindex": 4,
+      "lan_cidrs": ["10.20.0.0/24"],
+      "observation_domain": 1
+    },
+    {
+      "id": "edge-warehouse",
+      "exporter": "192.0.2.2",
+      "site": "Gudang Barat",
+      "vrf": "operasional",
+      "wan_ifindex": 7,
+      "lan_cidrs": ["10.20.0.0/24"],
+      "observation_domain": 2
+    }
+  ]
+}

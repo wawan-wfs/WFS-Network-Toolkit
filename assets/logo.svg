@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="WFS Network Toolkit">
+  <defs><linearGradient id="tile" x2="100%" y2="100%"><stop stop-color="#8B68FF"/><stop offset="1" stop-color="#5931D7"/></linearGradient><linearGradient id="wire" x2="100%" y2="100%"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#D8D2FF"/></linearGradient></defs>
+  <rect x="3" y="3" width="122" height="122" rx="31" fill="url(#tile)"/>
+  <rect x="5" y="5" width="118" height="118" rx="29" fill="none" stroke="#D5C6FF" stroke-opacity=".53" stroke-width="2"/>
+  <path d="M30 47L46 82 64 54 82 82 98 47" fill="none" stroke="url(#wire)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="30" cy="43" r="9" fill="#fff"/><circle cx="98" cy="43" r="9" fill="#fff"/><circle cx="64" cy="53" r="8" fill="#A0FFF1"/>
+</svg>

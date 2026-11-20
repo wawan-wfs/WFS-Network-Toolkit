@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "entries": [
+    { "ip": "192.0.2.10", "scope": "Lab-A/VRF1", "sensor": "DEMO — bukan data nyata", "observed_at": 1794672000, "kind": "WanReply" },
+    { "ip": "192.0.2.11", "scope": "Lab-A/VRF1", "sensor": "DEMO — bukan data nyata", "observed_at": 1794672000, "kind": "WanAttempt" },
+    { "ip": "192.0.2.10", "scope": "Lab-B/VRF1", "sensor": "DEMO — bukan data nyata", "observed_at": 1794672000, "kind": "Lan" }
+  ]
+}

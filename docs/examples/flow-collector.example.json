@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "bind": "192.0.2.10:4739",
+  "exporter": "192.0.2.1",
+  "site": "Lab-Contoh",
+  "wan_ifindex": 3,
+  "lan_cidrs": ["192.0.2.0/24", "2001:db8:10::/64"],
+  "observation_domain": 11
+}

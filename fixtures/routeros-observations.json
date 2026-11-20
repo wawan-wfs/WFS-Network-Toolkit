@@ -1,0 +1,18 @@
+{
+  "vrf": [{"name":"blue","interfaces":"vlan20"},{"name":"red","interfaces":["vlan30"]},{"name":"main","interfaces":"all"}],
+  "routing": [{"name":"blue","fib":"true"},{"name":"main","fib":true}],
+  "ports": [{".id":"*1","bridge":"bridge-LAN","interface":"ether2","pvid":"20","disabled":"false"}],
+  "vlans": [{".id":"*2","name":"vlan20","vlan-id":"20","interface":"bridge-LAN","disabled":"false"}],
+  "fdb": [{"mac-address":"02:11:22:33:44:55","bridge":"bridge-LAN","on-interface":"ether2","vid":"20","local":"false"},{"mac-address":"bad","bridge":"x","on-interface":"y"}],
+  "members": [{"bridge":"bridge-LAN","vlan-ids":["20","30"],"tagged":"sfp1","current-untagged":"ether2"}],
+  "servers": [{"name":"blue-dhcp","interface":"vlan20","address-pool":"blue-pool","disabled":"false"}],
+  "addresses4": [{"address":"192.0.2.1/24","interface":"vlan20","actual-interface":"vlan20"},{"address":"192.0.2.1/24","interface":"vlan30"}],
+  "addresses6": [{"address":"2001:db8:1::1/64","interface":"vlan20"}],
+  "pools4": [{"name":"blue-pool","ranges":"192.0.2.4-192.0.2.100,192.0.2.120"}],
+  "pools6": [{"name":"delegasi","prefix":"2001:db8:4::/48","prefix-length":"56"}],
+  "neighbors": [{"identity":"switch-gedung","interface":"sfp1","discovered-by":"lldp","comment":"do-not-copy"}],
+  "leases": [{"active-address":"192.0.2.21","active-mac-address":"02:11:22:33:44:55","server":"all","active-server":"blue-dhcp","status":"bound","expires-after":"2m"}],
+  "arp": [{"address":"192.0.2.21","mac-address":"02:11:22:33:44:66","interface":"vlan20","status":"reachable","complete":"true"},{"address":"192.0.2.21","mac-address":"02:11:22:33:44:77","interface":"vlan30","status":"reachable","complete":"true"},{"address":"192.0.2.21","mac-address":"02:11:22:33:44:88","interface":"vlan20","status":"stale","complete":"true"}],
+  "nd": [{"address":"fe80::1","mac-address":"02:11:22:33:44:99","status":"reachable"}],
+  "route": [{"dst-address":"0.0.0.0/0","gateway":"198.51.100.1","routing-table":"blue","active":"true"}]
+}

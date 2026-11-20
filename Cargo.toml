@@ -1,0 +1,23 @@
+[package]
+name = "wfs-network-toolkit"
+version = "1.2.0"
+edition = "2024"
+authors = ["WFS Project"]
+description = "Desktop network configuration and backup for Windows"
+rust-version = "1.89"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.42", features = ["bundled", "backup"] }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Networking_WinHttp", "Win32_Security_Credentials", "Win32_System_Registry", "Win32_System_IO", "Win32_System_Com", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_Graphics_Gdi", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+strip = true
+lto = "thin"

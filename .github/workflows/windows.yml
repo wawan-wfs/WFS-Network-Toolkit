@@ -1,0 +1,70 @@
+name: Windows build and unit tests
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - run: cargo +stable fmt --check
+      - run: rustfmt +stable --edition 2024 --check src/bin/native/toolkit_window.rs
+      - run: rustfmt +stable --edition 2024 --check src/bin/native/intelligence_window.rs
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - run: cargo +stable test --locked
+      - run: cargo +stable build --locked --release
+      - name: Check that the read-only CLI starts
+        run: |
+          .\target\release\wfs-netctl.exe list
+          if ($LASTEXITCODE -ne 0) { throw 'Adapter listing failed' }
+          .\target\release\wfs-netctl.exe archive-info
+      - name: Smoke test native window and controls without changing network settings
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\target\release\WFS-Network-Toolkit.exe -ArgumentList '--smoke-ui' -PassThru
+          if (-not $p.WaitForExit(30000)) {
+            Stop-Process -Id $p.Id -Force
+            throw "Native UI smoke test timed out"
+          }
+          if ($p.ExitCode -ne 0) { throw "Native UI smoke test failed ($($p.ExitCode))" }
+      - name: Package portable and installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Portable,dist/Installer | Out-Null
+          Copy-Item target/release/WFS-Network-Toolkit.exe,target/release/wfs-netctl.exe dist/Portable/
+          Copy-Item README.md dist/
+          Copy-Item docs dist/ -Recurse
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (-not (Test-Path $nsis)) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
+          $version = (cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json).packages[0].version
+          $setup = (Join-Path $PWD "dist/Installer/WFS-Network-Toolkit-${version}-x64-Setup.exe")
+          $gui = (Resolve-Path target/release/WFS-Network-Toolkit.exe).Path
+          $cli = (Resolve-Path target/release/wfs-netctl.exe).Path
+          $readme = (Resolve-Path README.md).Path
+          $guide = (Resolve-Path docs/HARDWARE_ACCEPTANCE.md).Path
+          Push-Location installer
+          try {
+            & $nsis /INPUTCHARSET UTF8 "/DGUI_FILE=$gui" "/DCLI_FILE=$cli" "/DREAD_ME=$readme" "/DHARDWARE_GUIDE=$guide" "/DOUT_FILE=$setup" WFS-Network-Toolkit.nsi
+          } finally { Pop-Location }
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'Installer build failed' }
+          Push-Location dist
+          try {
+            Get-ChildItem Portable,Installer -File -Recurse | Sort-Object FullName | ForEach-Object {
+              $relative = [IO.Path]::GetRelativePath($PWD.Path, $_.FullName).Replace('\','/')
+              "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
+            } | Set-Content SHA256SUMS.txt -Encoding ascii
+          } finally { Pop-Location }
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfs-network-toolkit-windows-x64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 60
