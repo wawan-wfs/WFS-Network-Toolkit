@@ -549,17 +549,34 @@ pub struct Collector {
 }
 impl Drop for Collector {
     fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+impl Collector {
+    fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+            && let Ok(mut data) = self.data.lock()
+        {
+            data.stats.error = Some("Worker UDP terhenti tidak normal.".into());
         }
-        // The receiver owns Writer; join it first so the last committed or
-        // rejected batches are visible to the alert monitor's final sample.
+        // Wait for the receiver-owned writer before sampling final counters.
         self.alert_stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.alert_worker.take() {
             worker.thread().unpark();
-            let _ = worker.join();
+            if worker.join().is_err()
+                && let Ok(mut data) = self.data.lock()
+            {
+                data.stats.alert_error = Some("Worker alert terhenti tidak normal.".into());
+            }
         }
+    }
+
+    /// Explicit stop preserves final errors for the caller before dropping buffers.
+    pub fn stop(mut self) -> Stats {
+        self.shutdown();
+        self.stats()
     }
 }
 fn monitor_alerts(
@@ -635,12 +652,32 @@ impl Collector {
         Self::start_group(CollectorConfig::legacy(config), None)
     }
     pub fn start_group(config: CollectorConfig, archive: Option<&Path>) -> Result<Self> {
+        // Public configuration fields may be constructed without the JSON parser.
+        // Revalidate before binding a socket or opening/migrating any archive.
+        if !(1..=16).contains(&config.profiles.len()) {
+            return Err("Diperlukan 1–16 profil exporter.".into());
+        }
         let mut allowed = HashMap::new();
+        let mut ids = std::collections::HashSet::new();
         for p in &config.profiles {
-            allowed.insert(
-                (p.config.exporter, p.config.observation_domain),
-                (p.clone(), p.config.cidrs()?),
-            );
+            p.config.validate()?;
+            if p.config.bind != config.bind
+                || p.id.is_empty()
+                || p.id.len() > 256
+                || super::label(&p.id) != p.id
+                || p.vrf.as_ref().is_some_and(|v| {
+                    v.trim().is_empty() || v.len() > 80 || super::label(v) != *v
+                })
+                || !ids.insert(&p.id)
+                || allowed
+                    .insert(
+                        (p.config.exporter, p.config.observation_domain),
+                        (p.clone(), p.config.cidrs()?),
+                    )
+                    .is_some()
+            {
+                return Err("Profil tidak valid, bind berbeda, atau identitas exporter ganda.".into());
+            }
         }
         let sock = UdpSocket::bind(config.bind)
             .map_err(|e| format!("Listener UDP tidak bisa dibuka: {e}"))?;
@@ -1040,6 +1077,22 @@ mod tests {
     fn cfg() -> FlowConfig {
         FlowConfig::parse(r#"{"schema":1,"bind":"127.0.0.1:4739","exporter":"127.0.0.1","site":"Lab","wan_ifindex":3,"lan_cidrs":["192.0.2.0/24"],"observation_domain":11}"#).unwrap()
     }
+    #[test]
+    fn collector_rejects_unvalidated_profiles_before_opening_archive() {
+        let mut invalid = cfg();
+        invalid.bind = "0.0.0.0:4739".parse().unwrap();
+        assert!(Collector::start(invalid).is_err());
+        let mut group = CollectorConfig::legacy(cfg());
+        group.profiles.push(group.profiles[0].clone());
+        assert!(Collector::start_group(group, None).is_err());
+        let mut group = CollectorConfig::legacy(cfg());
+        group.bind = "127.0.0.1:4740".parse().unwrap();
+        assert!(Collector::start_group(group, None).is_err());
+        let mut group = CollectorConfig::legacy(cfg());
+        group.profiles.clear();
+        assert!(Collector::start_group(group, None).is_err());
+    }
+
     #[test]
     fn parses_both_protocols_and_only_attributes_a_matching_wan_pair() {
         for v in [9, 10] {

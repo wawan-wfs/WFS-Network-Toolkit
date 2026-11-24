@@ -92,7 +92,7 @@ enum IntelReply {
     Export(PathBuf),
     Collector(Collector),
     History(history::History),
-    Stopped,
+    Stopped(Box<flow::Stats>),
     Alerts(PathBuf, Vec<AlertRecord>),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
@@ -949,7 +949,26 @@ impl Native {
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
             }
-            Ok(IntelReply::Stopped) => {}
+            Ok(IntelReply::Stopped(stats)) => {
+                self.intel.alert_rows.clear();
+                self.intel.alert_path = None;
+                let summary = format!(
+                    "Collector dihentikan. Arsip ditulis {} · duplikat {} · drop {} · tertunda {}.",
+                    stats.archived, stats.archive_duplicate, stats.archive_dropped, stats.archive_pending
+                );
+                let errors = [stats.error.as_deref(), stats.archive_error.as_deref(), stats.alert_error.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
+                if !errors.is_empty() || stats.archive_dropped != 0 || stats.archive_pending != 0 {
+                    notice = Some(Notice::Warning(format!(
+                        "{summary}\nHistori mungkin parsial.\n{}",
+                        errors.join("\n")
+                    )));
+                } else {
+                    self.set_notice(&summary);
+                }
+            }
             Ok(IntelReply::Alerts(path, rows)) => {
                 if self.archive_path().is_ok_and(|current| current == path) {
                     self.intel.alert_path = Some(path);
@@ -1368,8 +1387,7 @@ impl Native {
             INTEL_STOP => {
                 if let Some(collector) = self.intel.collector.take() {
                     self.start_intel(move || {
-                        drop(collector);
-                        Ok(IntelReply::Stopped)
+                        Ok(IntelReply::Stopped(Box::new(collector.stop())))
                     })?;
                 }
             }

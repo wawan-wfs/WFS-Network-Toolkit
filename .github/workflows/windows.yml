@@ -6,19 +6,15 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Validate rebranding and legacy identifiers
-        run: python scripts/test_branding.py
-      - name: Test exact SQLite contract (offline fixtures)
-        run: python scripts/test_alert_schema.py
-      - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-      - run: cargo +stable fmt --check
-      - run: rustfmt +stable --edition 2024 --check src/bin/native/toolkit_window.rs
-      - run: rustfmt +stable --edition 2024 --check src/bin/native/intelligence_window.rs
-      - run: cargo +stable clippy --locked --all-targets -- -D warnings
-      - run: cargo +stable test --locked
-      - run: cargo +stable build --locked --release
+        id: checkout
+      - name: Install stable Rust with lint and format components
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Collect independent build gate results (fail closed)
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: python scripts/gate_runner.py --out gate-evidence
       - name: Check that the read-only CLI starts
         run: |
           .\target\release\wfs-netctl.exe list
@@ -63,6 +59,14 @@ jobs:
               "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
             } | Set-Content SHA256SUMS.txt -Encoding ascii
           } finally { Pop-Location }
+      - name: Upload gate evidence even when validation fails
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wenet-gate-evidence
+          path: gate-evidence/
+          if-no-files-found: warn
+          retention-days: 30
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:

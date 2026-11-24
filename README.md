@@ -114,4 +114,4 @@ Smoke test memeriksa kontrol, navigasi halaman, footer, pilihan restore, kalkula
 
 ## Pengembangan berikutnya
 
-Lanjutkan dengan [Next Prompt WeNet Toolkit](docs/NEXT_PROMPT_WENET.md).
+Lanjutkan dengan [Next Prompt WeNet Toolkit — gate recovery](docs/NEXT_PROMPT_WENET_GATE_RECOVERY.md).

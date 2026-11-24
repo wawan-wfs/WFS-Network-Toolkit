@@ -1,3 +1,12 @@
+# WeNet Toolkit — gate recovery candidate
+
+- Added independent fail-closed gate runner, JSON and per-command logs uploaded even on CI failure; retains existing native smoke and packaging gate. Manual trigger only.
+- Five local runner tests and nine SQL regression tests passed (14/14); 11 test/SQL/runner file hashes match. Asset hashes preserved.
+- Revalidate collector direct configuration at start; explicit stop exposes final writer/alert/receiver errors and pending/dropped counters. Rust implementation not compiled yet.
+- Version and legacy identifiers unchanged. P1 features remain pending until Rust/Windows gate passes.
+
+---
+
 # WeNet Toolkit — changelog
 
 ## Rebranding kandidat (versi Cargo tetap 1.3.0-rc.1)

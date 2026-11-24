@@ -1,3 +1,20 @@
+# WeNet Toolkit — latest gate recovery report
+
+Baseline 107135e2674a857df91b5ad71aac7ad272401d47.
+
+| Gate | Actual result |
+|---|---|
+| Python gate runner | PASS 5/5, 3.144 s (synthetic subprocess tests) |
+| SQLite regression | PASS 9/9, 0.094 s; exact SQL and test script blob hashes verified |
+| Branding asset bytes | PASS 7 ICO size headers, 3 matching asset Git hashes |
+| Source safety adjustments | PARTIAL, not compiled |
+| Rust/Clippy/format/Windows smoke/installer | BLOCKED (no toolchain; no current manual CI) |
+| Network P1 features / lab / benchmark | NOT STARTED in this batch; P0 pending |
+
+See [GATE_RECOVERY.md](GATE_RECOVERY.md). Historical reports below are not evidence of this commit.
+
+---
+
 # WeNet Toolkit — status batch rebranding
 
 Baseline: 5da35be8cf0ba9869b6b6f0e33d4483a211f8998. Versi Cargo tetap 1.3.0-rc.1.

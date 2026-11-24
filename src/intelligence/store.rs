@@ -1244,8 +1244,11 @@ impl Writer {
 impl Drop for Writer {
     fn drop(&mut self) {
         drop(self.tx.take());
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
+        if let Some(h) = self.handle.take()
+            && h.join().is_err()
+            && let Ok(mut error) = self.stats.error.lock()
+        {
+            *error = Some("Writer arsip berhenti tidak normal; record tertunda belum terverifikasi.".into());
         }
     }
 }
