@@ -54,7 +54,6 @@ mod desktop {
     const RESOURCE_ICON: usize = 101;
 
     enum Request {
-        Admin,
         Driver,
         NetworkConnections,
         Backup {
@@ -524,10 +523,6 @@ mod desktop {
                 self.preview = None;
             }
             Ok(Some(match r {
-                Request::Admin => {
-                    w::elevate_window()?;
-                    notification(Notice::Status("Jendela Administrator dibuka.".into()))
-                }
                 Request::Driver => {
                     notification(Notice::Information(w::driver_info(&self.current()?.id)?))
                 }

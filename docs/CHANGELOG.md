@@ -1,5 +1,12 @@
 # Catatan rilis WFS Network Toolkit
 
+## 1.2.1
+
+- Mode Admin: child menunggu PID jendela lama selesai setelah UAC berhasil, sehingga tidak membuka dua GUI bersamaan; UAC ditolak mempertahankan sesi biasa.
+- Pengaman perpindahan Mode Admin saat collector UDP atau polling RouterOS aktif, agar tidak memotong sesi/kesempatan flush.
+- Diagnostik penyebab kehilangan record: antrean writer penuh, channel writer terputus, dan kesalahan tulis SQLite dibedakan, dengan regresi perhitungan agregat.
+- Workflow GitHub tetap **manual** (tanpa push-trigger) pada repo pengganti.
+
 ## 1.2.0
 
 - Polling RouterOS HTTPS GET opt-in per target, batas konkurensi dan interval, penghentian, jeda ulang, serta status hasil.

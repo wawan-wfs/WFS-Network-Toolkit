@@ -1385,7 +1385,21 @@ impl Native {
                 self.refresh(self.model.selected.clone());
                 return Ok(());
             }
-            ADMIN => Request::Admin,
+            ADMIN => {
+                if self.intel.collector.is_some()
+                    || !self.intel.schedule.jobs.is_empty()
+                    || self.intel.poll_rx.is_some()
+                {
+                    return Err("Hentikan collector Flow dan polling MikroTik sebelum membuka Mode Admin agar arsip tidak terputus.".into());
+                }
+                // Only close the existing window after UAC has succeeded.
+                // The child waits for this process to exit before showing the GUI.
+                w::elevate_window()?;
+                if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                    return Err("Gagal menutup jendela lama; periksa aplikasi yang sudah berjalan.".into());
+                }
+                return Ok(());
+            }
             DRIVER => Request::Driver,
             RESTORE_SCOPE => {
                 if self.restore_scope() != RestoreScope::Network {
@@ -2313,6 +2327,18 @@ pub fn run() {
         } else {
             code
         } as i32);
+    }
+    if let [flag, parent] = args.as_slice()
+        && flag == "--wait-for-parent"
+    {
+        if !w::elevated() {
+            show_launch_error("Mode Admin harus dijalankan dengan izin Administrator.", false);
+            std::process::exit(1);
+        }
+        if let Err(e) = w::wait_for_parent(parent) {
+            show_launch_error(&e, false);
+            std::process::exit(1);
+        }
     }
     let smoke = args.as_slice() == ["--smoke-ui"];
     if let Err(e) = start_ui(smoke) {

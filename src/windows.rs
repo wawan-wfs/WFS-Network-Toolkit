@@ -672,22 +672,56 @@ pub fn remote_session() -> bool {
 }
 pub fn elevate_window() -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let path: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+    // The elevated window waits for this process to exit before displaying UI.
+    // A cancelled UAC prompt never closes the existing window.
+    let parent = wide(&format!("--wait-for-parent {}", unsafe {
+        GetCurrentProcessId()
+    }));
     let code = unsafe {
         ShellExecuteW(
             null_mut(),
             wide("runas").as_ptr(),
             path.as_ptr(),
-            null(),
+            parent.as_ptr(),
             null(),
             1,
         )
     } as isize;
     if code <= 32 {
         return Err(format!(
-            "UAC dibatalkan atau tidak tersedia ({code}); tidak ada perubahan."
+            "UAC dibatalkan atau tidak tersedia ({code}); jendela lama tetap terbuka."
         ));
+    }
+    Ok(())
+}
+
+pub fn wait_for_parent(arg: &str) -> Result<()> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_OBJECT_0},
+        System::Threading::{GetCurrentProcessId, OpenProcess, WaitForSingleObject},
+    };
+    let pid: u32 = arg
+        .parse()
+        .map_err(|_| "Identitas proses sebelumnya tidak valid.")?;
+    if pid == 0 || pid == unsafe { GetCurrentProcessId() } {
+        return Err("Identitas proses sebelumnya tidak valid.".into());
+    }
+    // SYNCHRONIZE standard access right; no termination or mutation rights.
+    let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) };
+    if handle.is_null() {
+        // ERROR_INVALID_PARAMETER: the prior process has already exited.
+        if std::io::Error::last_os_error().raw_os_error() == Some(87) {
+            return Ok(());
+        }
+        return Err("Tidak dapat memverifikasi penutupan jendela sebelumnya.".into());
+    }
+    let completed = unsafe { WaitForSingleObject(handle, 20_000) };
+    unsafe { CloseHandle(handle) };
+    if completed != WAIT_OBJECT_0 {
+        return Err("Jendela sebelumnya belum tertutup; jendela Admin tidak dibuka.".into());
     }
     Ok(())
 }

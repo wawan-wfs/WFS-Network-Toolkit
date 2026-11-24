@@ -4,11 +4,17 @@ WFS Project · Windows 10/11 x64
 
 ## Buka aplikasi
 
-Buka [Actions Windows untuk `main`](https://github.com/wawanwfs/WFS-Network-Toolkit/actions/workflows/windows.yml?query=branch%3Amain), pilih run 1.2.0 yang hijau, lalu unduh paket Windows pada **Artifacts**. Login GitHub mungkin diperlukan.
+Buka [Actions Windows untuk `main`](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/workflows/windows.yml?query=branch%3Amain), pilih run 1.2.0 yang hijau, lalu unduh paket Windows pada **Artifacts**. Login GitHub mungkin diperlukan.
 
 Pilih `Portable\WFS-Network-Toolkit.exe` untuk menjalankan langsung atau `Installer\WFS-Network-Toolkit-1.2.0-x64-Setup.exe` untuk memasang. Shortcut ada di **WFS Project → WFS Network Toolkit** pada Start Menu. Tidak perlu WebView2.
 
-## Baru di 1.2.0
+## Perbaikan 1.2.1 — Mode Admin dan diagnosis arsip
+
+- **Mode Admin tidak membuka dua jendela sekaligus.** Setelah UAC diizinkan, aplikasi biasa meminta tutup dan aplikasi dengan hak Administrator menunggu proses lama berakhir sebelum menampilkan jendela. Jika UAC dibatalkan, jendela biasa tetap terbuka. Hentikan collector dan polling terlebih dahulu agar data tidak terputus; aplikasi akan mengingatkan jika masih aktif.
+- **Penyebab drop arsip terpisah.** Panel Penyimpanan arsip menampilkan antrean penuh, writer tertutup dan kegagalan SQLite. Total drop tetap tersedia untuk kompatibilitas. Statistik selama sesi, bukan bukti tidak ada drop pada socket/kernel.
+- **Batas verifikasi:** Smoke test Windows dapat memvalidasi startup tetapi persetujuan/penolakan UAC secara interaktif harus diuji pada Windows fisik atau VM. Pengaturan MAC Realtek tetap memerlukan uji frame Ethernet dari peer.
+
+## Fitur 1.2.0
 
 - **Polling RouterOS** dapat diaktifkan dan dihentikan per target. Proses hanya membaca melalui REST HTTPS, dengan interval minimum 60 detik, satu pekerjaan polling sekaligus, dan jeda ulang otomatis saat gagal.
 - **Tren interface** dan **Histori lease** dapat membuka sampel SQLite lintas restart atau dari salinan backup baca-saja. Dokumen panduan menjelaskan cara memilih target, rentang UTC, retensi, dan perbedaan data sesi dengan data arsip. [Panduan polling dan histori](docs/POLLING_ROUTEROS.md)

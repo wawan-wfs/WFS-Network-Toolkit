@@ -2479,8 +2479,13 @@ impl Native {
                 }
                 if let Some(stats) = self.intel.collector.as_ref().map(Collector::stats) {
                     let message = format!(
-                        "{} antre · {} drop · {} dipangkas",
-                        stats.archive_pending, stats.archive_dropped, stats.archive_pruned
+                        "{} antre · {} drop ({} penuh, {} tertutup, {} SQLite) · {} dipangkas",
+                        stats.archive_pending,
+                        stats.archive_dropped,
+                        stats.archive_queue_full,
+                        stats.archive_writer_closed,
+                        stats.archive_sqlite_failed,
+                        stats.archive_pruned
                     );
                     push(
                         [

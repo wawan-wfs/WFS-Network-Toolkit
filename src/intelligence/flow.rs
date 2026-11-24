@@ -523,6 +523,9 @@ pub struct Stats {
     pub error: Option<String>,
     pub archived: u64,
     pub archive_dropped: u64,
+    pub archive_queue_full: u64,
+    pub archive_writer_closed: u64,
+    pub archive_sqlite_failed: u64,
     pub archive_pending: u64,
     pub archive_duplicate: u64,
     pub archive_pruned: u64,
@@ -677,6 +680,9 @@ impl Collector {
         if let Some(a) = &self.archive_stats {
             stats.archived = a.written.load(Ordering::Relaxed);
             stats.archive_dropped = a.dropped.load(Ordering::Relaxed);
+            stats.archive_queue_full = a.queue_full.load(Ordering::Relaxed);
+            stats.archive_writer_closed = a.writer_closed.load(Ordering::Relaxed);
+            stats.archive_sqlite_failed = a.sqlite_failed.load(Ordering::Relaxed);
             stats.archive_pending = a.pending_rows.load(Ordering::Relaxed);
             stats.archive_duplicate = a.duplicates.load(Ordering::Relaxed);
             stats.archive_pruned = a.pruned.load(Ordering::Relaxed);

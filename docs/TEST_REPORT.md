@@ -1,4 +1,13 @@
-# WFS Network Toolkit 1.2.0 — laporan uji
+# WFS Network Toolkit 1.2.1 — laporan uji
+
+## Status verifikasi 1.2.1
+
+- Perbaikan sumber ditargetkan pada repo `wawan-wfs/WFS-Network-Toolkit` yang ditemukan berisi source v1.2.0. Histori v1.3 dari repo `wawanwfs` **belum dipulihkan** di repo pengganti.
+- Penambahan tes `archive_drop_categories_are_separate_and_sum_to_total` membuktikan penjumlahan penghitung untuk tiga alasan di level unit. Bukan bukti kehilangan paket kernel atau benchmark UDP di perangkat fisik.
+- Mode Admin sekarang menjalankan child dengan parameter PID induk dan baru membuka GUI setelah induk berhenti. **Belum ada pengujian UAC interaktif** sampai mesin Windows tersedia. UAC batal harus meninggalkan jendela lama terbuka.
+- Perubahan tidak menyentuh konfigurasi router, adaptor, firewall, atau profil jaringan untuk QA.
+
+## Riwayat laporan 1.2.0
 
 Baseline pengembangan v1.2 adalah `82a25d36e761d619b9f861785071b53cda493cd1`.
 

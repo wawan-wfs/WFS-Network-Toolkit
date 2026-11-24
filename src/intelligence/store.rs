@@ -1009,9 +1009,29 @@ pub struct WriterStats {
     pub written: AtomicU64,
     pub duplicates: AtomicU64,
     pub dropped: AtomicU64,
+    pub queue_full: AtomicU64,
+    pub writer_closed: AtomicU64,
+    pub sqlite_failed: AtomicU64,
     pub pruned: AtomicU64,
     pub pending_rows: AtomicU64,
     pub error: Mutex<Option<String>>,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DropCause {
+    QueueFull,
+    WriterClosed,
+    SqliteFailed,
+}
+impl WriterStats {
+    fn note_drop(&self, cause: DropCause, rows: usize) {
+        let count = rows as u64;
+        self.dropped.fetch_add(count, Ordering::Relaxed);
+        match cause {
+            DropCause::QueueFull => self.queue_full.fetch_add(count, Ordering::Relaxed),
+            DropCause::WriterClosed => self.writer_closed.fetch_add(count, Ordering::Relaxed),
+            DropCause::SqliteFailed => self.sqlite_failed.fetch_add(count, Ordering::Relaxed),
+        };
+    }
 }
 pub struct Writer {
     tx: Option<SyncSender<Vec<ArchiveRow>>>,
@@ -1064,9 +1084,7 @@ impl Writer {
                                     .fetch_add((batch.len() - n) as u64, Ordering::Relaxed);
                             }
                             Err(e) => {
-                                counters
-                                    .dropped
-                                    .fetch_add(batch.len() as u64, Ordering::Relaxed);
+                                counters.note_drop(DropCause::SqliteFailed, batch.len());
                                 if let Ok(mut s) = counters.error.lock() {
                                     *s = Some(e);
                                 }
@@ -1094,13 +1112,16 @@ impl Writer {
             self.stats
                 .pending_rows
                 .fetch_add(batch.len() as u64, Ordering::Relaxed);
-            if let Err(TrySendError::Full(v) | TrySendError::Disconnected(v)) = tx.try_send(batch) {
-                self.stats
-                    .pending_rows
-                    .fetch_sub(v.len() as u64, Ordering::Relaxed);
-                self.stats
-                    .dropped
-                    .fetch_add(v.len() as u64, Ordering::Relaxed);
+            match tx.try_send(batch) {
+                Ok(()) => {}
+                Err(TrySendError::Full(v)) => {
+                    self.stats.pending_rows.fetch_sub(v.len() as u64, Ordering::Relaxed);
+                    self.stats.note_drop(DropCause::QueueFull, v.len());
+                }
+                Err(TrySendError::Disconnected(v)) => {
+                    self.stats.pending_rows.fetch_sub(v.len() as u64, Ordering::Relaxed);
+                    self.stats.note_drop(DropCause::WriterClosed, v.len());
+                }
             }
         }
     }
@@ -1277,6 +1298,18 @@ mod tests {
         drop(db);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
+    #[test]
+    fn archive_drop_categories_are_separate_and_sum_to_total() {
+        let stats = WriterStats::default();
+        stats.note_drop(DropCause::QueueFull, 12);
+        stats.note_drop(DropCause::WriterClosed, 3);
+        stats.note_drop(DropCause::SqliteFailed, 5);
+        assert_eq!(stats.queue_full.load(Ordering::Relaxed), 12);
+        assert_eq!(stats.writer_closed.load(Ordering::Relaxed), 3);
+        assert_eq!(stats.sqlite_failed.load(Ordering::Relaxed), 5);
+        assert_eq!(stats.dropped.load(Ordering::Relaxed), 20);
+    }
+
     fn row(site: &str, received: u64, ordinal: u32) -> ArchiveRow {
         ArchiveRow {
             profile: format!("profile-{site}"),
