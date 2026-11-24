@@ -515,6 +515,65 @@ impl LeaseTimeline {
     }
 }
 
+/// Count only observations with explicit interface attribution. DHCP server
+/// names are resolved only from complete server configuration, not guessed.
+pub fn subnets(s: &RouterSnapshot) -> super::overview::Subnets {
+    let scope = Scoped::new(s);
+    let mut index = super::overview::Index::default();
+    for r in &s.network.0 {
+        if !matches!(r.table, Table::Address4 | Table::Address6) || r.disabled {
+            continue;
+        }
+        if let Some((stamp, complete)) = observed(s, r.table)
+            && let Some((ip, bits)) = prefix(&r.subject)
+        {
+            // Other tables can be missing, so even a complete address response
+            // never means that all assignments in this subnet are known.
+            let partial = !complete
+                || [Table::Arp, Table::Neighbor6, Table::Lease, Table::DhcpServer]
+                    .iter()
+                    .any(|t| !observed(s, *t).is_some_and(|(time, full)| {
+                        full && time.abs_diff(stamp) <= 60
+                    }));
+            index.configure(
+                r.value.clone(),
+                scope.name(Some(&r.value)),
+                ip,
+                bits,
+                stamp,
+                partial,
+            );
+            index.observe(r.value.clone(), ip);
+        }
+    }
+    for h in &s.inventory {
+        let table = match h.source.as_str() {
+            "DHCPv4" => Table::Lease,
+            "ARP" => Table::Arp,
+            _ => Table::Neighbor6,
+        };
+        let Some((stamp, _)) = observed(s, table) else {
+            continue;
+        };
+        let interface = if h.source == "DHCPv4" {
+            if !observed(s, Table::DhcpServer)
+                .is_some_and(|(time, full)| full && time.abs_diff(stamp) <= 60)
+            {
+                continue;
+            }
+            h.location
+                .as_deref()
+                .and_then(|name| scope.servers.get(name).copied().flatten())
+        } else {
+            h.location.as_deref()
+        };
+        if let Some(interface) = interface {
+            index.observe(interface.to_owned(), h.ip);
+        }
+    }
+    index.finish()
+}
+
 pub fn inventory(s: &RouterSnapshot) -> Vec<Observation> {
     let scope = Scoped::new(s);
     let mut out = from_rows(&scope, true);
@@ -620,6 +679,32 @@ pub fn inventory(s: &RouterSnapshot) -> Vec<Observation> {
 mod tests {
     use super::*;
     use crate::intelligence::router::Authority;
+    #[test]
+    fn subnet_scope_keeps_identical_prefixes_separate() {
+        let mut s = RouterSnapshot::new(&Authority::parse("fixture.example.test").unwrap(), 100);
+        s.ingest(
+            Table::Address4,
+            Ok(br#"[{"address":"192.0.2.1/24","interface":"blue"},{"address":"192.0.2.1/24","interface":"red"},{"address":"198.51.100.1/24","interface":"off","disabled":true}]"#.to_vec()),
+            100,
+        );
+        s.ingest(
+            Table::Address6,
+            Ok(br#"[{"address":"2001:db8::1/64","interface":"blue"}]"#.to_vec()),
+            100,
+        );
+        let view = subnets(&s);
+        assert_eq!(view.rows.len(), 3);
+        let same: Vec<_> = view
+            .rows
+            .iter()
+            .filter(|r| r.prefix.to_string() == "192.0.2.0/24")
+            .collect();
+        assert_eq!(same.len(), 2);
+        assert_ne!(same[0].scope, same[1].scope);
+        assert!(same.iter().all(|r| r.observed == 1 && r.partial));
+        assert!(view.rows.iter().any(|r| r.prefix.to_string() == "2001:db8::/64"));
+    }
+
     fn fixture() -> RouterSnapshot {
         let mut s = RouterSnapshot::new(&Authority::parse("r1.example.test").unwrap(), 100);
         s.identity = Some("fixture-router".into());

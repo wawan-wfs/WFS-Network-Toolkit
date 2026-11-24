@@ -15,6 +15,7 @@ pub mod flow;
 pub mod history;
 pub mod interface_trend;
 pub mod network_map;
+pub mod overview;
 pub mod polling;
 pub mod router;
 pub mod router_history;

@@ -1,3 +1,9 @@
+# P1 checkpoint after successful baseline acceptance
+
+Run 45431125979 at ae36e729 passed every gate and produced Windows packages. New P1 dashboard/subnet source is not yet verified. First run workflow_dispatch on newest main and fix any actual formatting, compile, lint, test, smoke and NSIS failures without bypassing gates. Validate real dashboard source freshness, filtered row navigation, pending archive reads, scope counts, overlapping prefixes, IPv6 /0 and /128, no free-address claims, partial and caps. Add fixture coverage for RouterOS mixed VRF and incomplete DHCP server mapping. After new gate passes continue native graph canvas, persistent scoped IPAM metadata, DHCPv6 bindings/PD, monitoring and flow provenance, premium UI, physical lab/VM and benchmarks in full prompt below. Preserve all existing features and schema/installer compatibility; no auto triggers, no version bump before verified release.
+
+---
+
 # Latest checkpoint: native UI smoke gate
 
 All 10 build gates and CLI passed on e561f864 (run 45429043158); native GUI smoke failed with exit 1, installer skipped. Source fixes async alert smoke and adds gate-evidence/native-ui-smoke.log. Run manual workflow on newest main, inspect log stages and exact FAIL message, fix remaining actual errors, preserve smoke and packaging checks. Never interpret old build as passing newest commit. Only after full gate passes, proceed to P1 in the complete prompt below.

@@ -1,3 +1,13 @@
+# WeNet Toolkit — gate acceptance and P1 candidate
+
+Manual run 45431125979 on ae36e7293cf846ee639f2210775e71b1c8f7d850: all 10 build gates, CLI, native GUI smoke and NSIS packaging passed. Rust 70 passed, 0 failed, 2 ignored; Python 18 passed. Release build 74 s. Native smoke log ends PASS. Package artifact 14939820358 and evidence 14938594329. Both artifact ZIP SHA-256 digests match GitHub metadata; all three executable SHA-256 checks match SHA256SUMS.txt. This acceptance applies to ae36e729 only, not new P1 code.
+
+New source batch: dashboard with source coverage, local and router inventory, per-interface bandwidth samples and P95, collector/exporter health, archive measurement, and navigation to existing modules. New IPv4/IPv6 subnet inventory counts distinct observed addresses per explicit interface, caps 512 prefixes per source, does not infer free addresses or aggregate overlapping prefixes. Includes unit and GUI fixture checks. New source has not yet been compiled or executed; no new installer claimed. Physical UAC, installation upgrade, Realtek/MikroTik, benchmark and full graph canvas/DHCPv6 binding remain pending. Actions manual only.
+
+[Successful CI](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45431125979) · [Package](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45431125979/artifacts/14939820358)
+
+---
+
 # WeNet Toolkit — native GUI gate recovery
 
 Run manual [45429043158](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45429043158), commit e561f864e01e53a9c47fdb537cb8d51fab854dc5, job 138568955282. All ten build gates passed, including three format checks, Clippy, unit tests and release build (72.828 s); read-only CLI passed. Native GUI smoke exited 1 after approximately one second, not a timeout. Packaging skipped. The log did not contain the internal assertion error, so the exact failing assertion is not known.

@@ -7,6 +7,7 @@ use wfs_network_toolkit::intelligence::{
     history,
     interface_trend::{self, Trend},
     network_map::{self, LeaseTimeline, Observation},
+    overview,
     polling::{Outcome, Schedule},
     router::{Authority, InterfaceBaseline, RouterSnapshot, interface_bitrate},
     router_history::{Sample, Views},
@@ -45,7 +46,9 @@ const TREND_MODE: usize = 21;
 const LEASE_MODE: usize = 22;
 const ALERT_MODE: usize = 23;
 const POLL_MODE: usize = 24;
-const INTEL_MODES: [&str; 25] = [
+const DASHBOARD_MODE: usize = 25;
+const SUBNET_MODE: usize = 26;
+const INTEL_MODES: [&str; 27] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -71,6 +74,8 @@ const INTEL_MODES: [&str; 25] = [
     "Histori lease sesi",
     "Alert collector",
     "Polling RouterOS",
+    "Dashboard jaringan",
+    "Ringkasan subnet IPv4/IPv6",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -144,6 +149,7 @@ struct IntelState {
     poll_rx: Option<Receiver<PollResult>>,
     poll_save_errors: std::collections::BTreeMap<String, String>,
     router_history: Option<(String, Box<Views>)>,
+    dashboard_targets: Vec<usize>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -472,6 +478,11 @@ impl Native {
     }
     fn load_storage(&mut self) -> Result<()> {
         let path = self.archive_path()?;
+        if selection(self.h(INTEL_MODE)) == DASHBOARD_MODE {
+            self.intel.storage = None;
+            self.intel.storage_loaded = false;
+            self.render_intel();
+        }
         self.start_intel(move || {
             let info = if path.try_exists().map_err(|e| e.to_string())? {
                 Some(Box::new(Archive::reader(&path)?.health(&path)?))
@@ -694,7 +705,14 @@ impl Native {
                 && self.intel.router_history.is_none()
                 && matches!(
                     selection(self.h(INTEL_MODE)),
-                    POLL_MODE | 5 | TOPOLOGY_MODE | IPAM_MODE | TREND_MODE | LEASE_MODE
+                    POLL_MODE
+                        | 5
+                        | TOPOLOGY_MODE
+                        | IPAM_MODE
+                        | TREND_MODE
+                        | LEASE_MODE
+                        | DASHBOARD_MODE
+                        | SUBNET_MODE
                 )
                 && self.intel.work.is_none()
             {
@@ -734,7 +752,9 @@ impl Native {
         } else {
             self.intel.schedule.complete(now, Outcome::Other);
         }
-        if self.page == Page::Intel && selection(self.h(INTEL_MODE)) == POLL_MODE {
+        if self.page == Page::Intel
+            && matches!(selection(self.h(INTEL_MODE)), POLL_MODE | DASHBOARD_MODE)
+        {
             self.render_intel();
             self.controls();
         }
@@ -854,10 +874,10 @@ impl Native {
         }
         set(
             self.h(INTEL_IP_JOURNEY),
-            if mode == DEVICE_MODE {
-                "Koneksi"
-            } else {
-                "Detail IP"
+            match mode {
+                DEVICE_MODE => "Koneksi",
+                DASHBOARD_MODE => "Buka modul",
+                _ => "Detail IP",
             },
         );
         if mode == POLL_MODE {
@@ -882,6 +902,7 @@ impl Native {
                 POLL_MODE => "Interval detik (default 120)",
                 TREND_MODE | LEASE_MODE => "Filter sesi atau dua detik UTC untuk Arsip",
                 ALERT_MODE => "state=open/ack/recovered + site/VRF",
+                DASHBOARD_MODE | SUBNET_MODE => "Cari sumber, scope atau subnet",
                 _ => "Cari IP, port, PID…",
             })
             .as_ptr() as isize,
@@ -937,7 +958,12 @@ impl Native {
                 self.apply_router((s, topology, inventory));
                 if !matches!(
                     selection(self.h(INTEL_MODE)),
-                    TOPOLOGY_MODE | IPAM_MODE | TREND_MODE | LEASE_MODE
+                    TOPOLOGY_MODE
+                        | IPAM_MODE
+                        | TREND_MODE
+                        | LEASE_MODE
+                        | DASHBOARD_MODE
+                        | SUBNET_MODE
                 ) {
                     select(self.h(INTEL_MODE), 6);
                 }
@@ -1164,7 +1190,7 @@ impl Native {
                     self.intel.archived = None;
                     self.intel.archive_query = None;
                     self.load_archive(Query::default(), None)?;
-                } else if mode == STORAGE_MODE {
+                } else if matches!(mode, STORAGE_MODE | DASHBOARD_MODE) {
                     self.load_storage()?;
                 } else if mode == ALERT_MODE {
                     self.load_alerts(self.intel.filter.clone())?;
@@ -1206,6 +1232,10 @@ impl Native {
                         }
                     }
                     POLL_MODE => self.render_intel(),
+                    DASHBOARD_MODE => {
+                        self.intel.filter = input;
+                        self.load_storage()?;
+                    }
                     ALERT_MODE => {
                         self.intel.filter = input.clone();
                         self.load_alerts(input)?;
@@ -1228,7 +1258,15 @@ impl Native {
                 let index = self
                     .selected_intel_row()
                     .ok_or("Pilih satu baris terlebih dahulu.")?;
-                if mode == DEVICE_MODE {
+                if mode == DASHBOARD_MODE {
+                    let target = *self
+                        .intel
+                        .dashboard_targets
+                        .get(index)
+                        .ok_or("Pilih baris dashboard.")?;
+                    select(self.h(INTEL_MODE), target);
+                    self.intel_action(INTEL_MODE)?;
+                } else if mode == DEVICE_MODE {
                     let (view, q) = self
                         .intel
                         .device
@@ -1623,7 +1661,203 @@ impl Native {
             )
         };
         let local = self.intel.local.as_deref();
+        let mut dashboard_targets = Vec::new();
         let description = match mode {
+            DASHBOARD_MODE => {
+                let mut row = |values: [String; 4], detail: String, target: usize| {
+                    if search.matches(&values.each_ref().map(String::as_str))
+                        && dashboard_targets.len() < INTEL_ROW_LIMIT
+                    {
+                        dashboard_targets.push(target);
+                    }
+                    push(values, &|| detail.clone());
+                };
+                let now = ni::now();
+                if let Some(s) = local {
+                    let c = overview::coverage(&s.coverage, now);
+                    row(
+                        [
+                            "Windows lokal".into(),
+                            format!("{} alamat · {} cache", s.addresses.len(), s.neighbors.len()),
+                            format!("{} lengkap / {} parsial", c.complete, c.partial),
+                            format!("{} endpoint · UTC {}", s.endpoints.len(), s.observed_at),
+                        ],
+                        format!(
+                            "{} sumber tidak tersedia, {} kedaluwarsa atau waktu ambigu. Cache bukan bukti perangkat online.",
+                            c.unavailable, c.stale
+                        ),
+                        1,
+                    );
+                } else {
+                    row(
+                        [
+                            "Windows lokal".into(),
+                            "Belum dibaca".into(),
+                            "Tidak diketahui".into(),
+                            "Muat ulang".into(),
+                        ],
+                        "Gunakan Muat ulang untuk snapshot read-only PC ini.".into(),
+                        1,
+                    );
+                }
+                for (key, s) in &self.intel.routers {
+                    let c = overview::coverage(&s.coverage, now);
+                    let poll = self.intel.schedule.jobs.get(key);
+                    row(
+                        [
+                            "MikroTik".into(),
+                            key.clone(),
+                            format!("{} lengkap / {} parsial / {} gagal", c.complete, c.partial, c.unavailable),
+                            format!("{} observasi IP · UTC {}", s.inventory.len(), s.observed_at),
+                        ],
+                        format!(
+                            "{} interface, {} koneksi, {} sumber historis/ambigu. Polling: {:?}. Tidak menyatakan router online dari snapshot.",
+                            s.interfaces.len(), s.connections.len(), c.stale, poll.and_then(|p| p.outcome)
+                        ),
+                        5,
+                    );
+                    if let Some(trend) = self.intel.trends.get(key) {
+                        for (name, points) in &trend.streams {
+                            let summary = interface_trend::summarize(points);
+                            if let Some(last) = points.back() {
+                                row(
+                                    [
+                                        "Bandwidth interface".into(),
+                                        format!("{key} / {name}"),
+                                        format!("RX {} bps · TX {} bps", display_opt(last.rx_bps), display_opt(last.tx_bps)),
+                                        format!("UTC {} · {} gap", last.utc, summary.gaps),
+                                    ],
+                                    format!(
+                                        "P95 RX {} bps · TX {} bps. {} interval valid. Gap tidak dihitung nol; tidak menjumlahkan interface yang mungkin membawa trafik sama.",
+                                        display_opt(summary.p95_rx), display_opt(summary.p95_tx), summary.valid_intervals
+                                    ),
+                                    TREND_MODE,
+                                );
+                            }
+                        }
+                    }
+                }
+                if let Some(c) = &self.intel.collector {
+                    let stats = c.stats();
+                    row(
+                        [
+                            "Collector Flow".into(),
+                            format!("{} datagram", stats.accepted_datagrams),
+                            format!("{} drop · {} antre", stats.archive_dropped, stats.archive_pending),
+                            format!("{} record tersimpan", stats.archived),
+                        ],
+                        format!(
+                            "Antrean penuh {} · writer tertutup {} · SQLite gagal {}. Error: {:?} / {:?} / {:?}. Tidak mengukur drop kernel.",
+                            stats.archive_queue_full, stats.archive_writer_closed, stats.archive_sqlite_failed,
+                            stats.error, stats.archive_error, stats.alert_error
+                        ),
+                        13,
+                    );
+                    for (scope, stats) in c.source_stats() {
+                        row(
+                            [
+                                "Exporter".into(),
+                                scope,
+                                format!("{} diterima", stats.accepted_datagrams),
+                                format!("{} template hilang · UTC {}", stats.missing_templates, display_opt(stats.last_received)),
+                            ],
+                            "Counter sesi per profil/domain; tidak membuktikan keterjangkauan atau volume trafik unik.".into(),
+                            13,
+                        );
+                    }
+                } else {
+                    row(
+                        [
+                            "Collector Flow".into(),
+                            "Tidak aktif".into(),
+                            "Tidak diketahui".into(),
+                            "Mulai hanya dengan izin".into(),
+                        ],
+                        "Tidak ada penerimaan UDP pada sesi ini.".into(),
+                        13,
+                    );
+                }
+                if let Some(s) = &self.intel.storage {
+                    row(
+                        [
+                            "Arsip SQLite".into(),
+                            format!("{} record · {} scope", s.flow_records, s.source_scopes),
+                            format!("{} snapshot", s.snapshots),
+                            format!("UTC {}", s.measured_utc),
+                        ],
+                        format!(
+                            "Snapshot arsip {}. Database {} byte, WAL {} byte. Muat ulang untuk pengukuran baru.",
+                            if self.intel.recovery_view.is_some() { "baca-saja" } else { "utama" },
+                            s.main_bytes, s.wal_bytes
+                        ),
+                        STORAGE_MODE,
+                    );
+                } else {
+                    row(
+                        [
+                            "Arsip SQLite".into(),
+                            "Belum tersedia".into(),
+                            "Tidak diketahui".into(),
+                            "Cari untuk membaca".into(),
+                        ],
+                        "Tidak ada hasil pengukuran arsip yang dapat ditampilkan.".into(),
+                        STORAGE_MODE,
+                    );
+                }
+                row(
+                    [
+                        "Alert Center".into(),
+                        "Buka histori".into(),
+                        "Bukan jumlah total".into(),
+                        "Filter & ACK".into(),
+                    ],
+                    "Ledger dibaca ketika modul dibuka; tidak menggunakan jumlah halaman terfilter sebagai jumlah semua alert.".into(),
+                    ALERT_MODE,
+                );
+                row(
+                    [
+                        "IPAM subnet".into(),
+                        "IPv4 dan IPv6".into(),
+                        "Observasi".into(),
+                        "Buka modul".into(),
+                    ],
+                    "Inventaris berdasarkan interface, bukan daftar alamat bebas.".into(),
+                    SUBNET_MODE,
+                );
+                "Dashboard snapshot. Pilih baris dan Buka modul. Tidak ada klaim jaringan sehat dari data yang tidak tersedia."
+            }
+            SUBNET_MODE => {
+                let mut groups = Vec::new();
+                if let Some(s) = local {
+                    groups.push(overview::local_subnets(s));
+                }
+                groups.extend(self.intel.routers.values().map(|s| network_map::subnets(s)));
+                let limited = groups.iter().any(|g| g.limited);
+                for r in groups.iter().flat_map(|g| &g.rows) {
+                    push(
+                        [
+                            r.prefix.to_string(),
+                            r.scope.clone(),
+                            format!("{} konfigurasi · {} IP teramati", r.configured, r.observed),
+                            if r.partial {
+                                "Cakupan parsial"
+                            } else {
+                                "Snapshot sumber"
+                            }
+                            .into(),
+                        ],
+                        &|| format!(
+                            "Subnet {} · {}\n{} alamat dalam prefix (termasuk alamat khusus). {} konfigurasi interface; {} IP unik teramati pada scope. UTC {}. Tidak teramati ≠ bebas. Tidak ada pemindaian atau reservasi otomatis. Prefix bertumpang tindih tidak dijumlahkan.",
+                            r.prefix, r.scope, r.prefix.cardinality(), r.configured, r.observed, r.observed_at
+                        ),
+                    );
+                }
+                if limited {
+                    "Batas 512 prefix per sumber tercapai. Hasil parsial. Tidak teramati bukan berarti bebas."
+                } else {
+                    "Subnet per interface IPv4/IPv6. Hitung IP teramati, bukan utilisasi pasti atau alamat bebas."
+                }
+            }
             0 => {
                 for a in self.intel.assessments() {
                     push(
@@ -2699,7 +2933,10 @@ impl Native {
             );
         }
         for (id, show) in [
-            (INTEL_IP_JOURNEY, matches!(mode, 0 | 1 | DEVICE_MODE)),
+            (
+                INTEL_IP_JOURNEY,
+                matches!(mode, 0 | 1 | DEVICE_MODE | DASHBOARD_MODE),
+            ),
             (
                 INTEL_BACK,
                 mode == ARCHIVE_MODE && self.intel.pivot_scope.is_some()
@@ -2741,6 +2978,7 @@ impl Native {
             .collect();
         self.table_rows(INTEL_TABLE, &visible, 4);
         self.intel.details = details;
+        self.intel.dashboard_targets = dashboard_targets;
         set(
             self.h(INTEL_STATUS),
             &format!(

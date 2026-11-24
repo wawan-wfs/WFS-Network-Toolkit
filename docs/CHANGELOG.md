@@ -1,3 +1,11 @@
+# P1 dashboard and scoped IPv4/IPv6 subnet candidate
+
+- Baseline ae36e729 passed all Windows gates and produced a portable/installer.
+- Added native network dashboard and module navigation, source freshness/coverage, RX/TX/P95 per interface, flow exporter and archive summary.
+- Added bounded scoped IPv4/IPv6 prefix and distinct observation counts; no inferred free addresses. Tests added for mixed-family prefix boundaries, scope separation, cap, coverage and GUI; new Rust and GUI gate pending. Existing versions/schema/backup identifiers retained.
+
+---
+
 # Native GUI smoke recovery
 
 - All ten build gates and CLI passed on e561f864; native GUI smoke exited 1 without internal diagnostics.

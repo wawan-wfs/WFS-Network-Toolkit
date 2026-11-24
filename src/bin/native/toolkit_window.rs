@@ -1002,6 +1002,7 @@ impl Native {
                     normal
                         && match selection(self.h(INTEL_MODE)) {
                             0 | 1 => self.intel.visible_ips.iter().any(Option::is_some),
+                            DASHBOARD_MODE => !self.intel.dashboard_targets.is_empty(),
                             DEVICE_MODE => self
                                 .intel
                                 .device
@@ -2300,6 +2301,19 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         let _ = std::fs::remove_dir_all(dir);
     }
     journey?;
+    smoke_trace("Dashboard and subnet fixtures");
+    select(ui.h(INTEL_MODE), SUBNET_MODE);
+    ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
+    if !get(ui.h(INTEL_STATUS)).contains("alamat bebas") {
+        return Err("Ringkasan subnet tidak menampilkan batas bukti.".into());
+    }
+    // Render without launching a real archive read outside the fixture.
+    select(ui.h(INTEL_MODE), DASHBOARD_MODE);
+    ui.intel_mode_labels(DASHBOARD_MODE);
+    ui.render_intel();
+    if ui.intel.dashboard_targets.is_empty() || get(ui.h(INTEL_IP_JOURNEY)) != "Buka modul" {
+        return Err("Dashboard jaringan tidak menampilkan modul.".into());
+    }
     smoke_trace("RouterOS topology and IPAM fixtures");
     let auth = Authority::parse("fixture.example.test")?;
     let mut fixture = RouterSnapshot::new(&auth, 100);
