@@ -20,6 +20,7 @@ jobs:
           .\target\release\wfs-netctl.exe list
           if ($LASTEXITCODE -ne 0) { throw 'Adapter listing failed' }
           .\target\release\wfs-netctl.exe archive-info
+          if ($LASTEXITCODE -ne 0) { throw 'Archive info failed' }
       - name: Smoke test native window and controls without changing network settings
         shell: pwsh
         run: |

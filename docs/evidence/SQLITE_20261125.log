@@ -1,0 +1,30 @@
+Local offline test — baseline 4e2fce1224a8dca0b54ca5c31d189b699be54147
+Python 3.13.5 / SQLite 3.46.1
+Command: python scripts/test_alert_schema.py
+Git blob hashes of eight SQL inputs and test script matched baseline:
+001.sql d1ebe8e524edd5371d58cfba10dd2d49b0f23078
+002.sql f44560e6b75cc1b5963c28b5bdb3d832869b78e7
+004.sql a6980cf6f81701d95d28fefeeeb2f6076e0b85db
+alert_ack.sql 5ff54fbea4df4a7790ff259f17118bfdbf765fa8
+alert_cap.sql 97cae1374e7ba39faa02eae7d2bedbf0cd392fbf
+alert_page.sql dae080d8c85f27e8c61b53a4f5d6ecf38c839acf
+alert_prune.sql c2f5e831ce938b8126af9fc4509833d0f776ccf9
+alert_upsert.sql 7df9b34261ac5a4b85dc3378a8c6041eddd6b626
+test_alert_schema.py 9046432ad239d54701ae93c132b964e22c038c44
+
+test_ack_replay_and_identity_collision (__main__.LedgerTest.test_ack_replay_and_identity_collision) ... ok
+test_atomic_migration_rollback (__main__.LedgerTest.test_atomic_migration_rollback) ... ok
+test_exact_state_and_scoped_search (__main__.LedgerTest.test_exact_state_and_scoped_search) ... ok
+test_quota_full_rolls_back_without_deleting_existing_alert (__main__.LedgerTest.test_quota_full_rolls_back_without_deleting_existing_alert) ... ok
+test_retention_cap_and_stable_pagination (__main__.LedgerTest.test_retention_cap_and_stable_pagination) ... ok
+test_stale_recovery_and_clock_regression (__main__.LedgerTest.test_stale_recovery_and_clock_regression) ... ok
+test_v1_migrate_preserves_snapshot (__main__.LedgerTest.test_v1_migrate_preserves_snapshot) ... ok
+test_v2_migrate_preserves_router_sample (__main__.LedgerTest.test_v2_migrate_preserves_router_sample) ... ok
+test_wal_backup_reopen_readonly_and_write_lock (__main__.LedgerTest.test_wal_backup_reopen_readonly_and_write_lock) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.095s
+
+OK
+
+Scope: exact SQLite contract; not Rust, Windows, GUI, or live device verification.

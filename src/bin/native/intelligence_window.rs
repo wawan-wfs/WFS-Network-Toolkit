@@ -142,6 +142,8 @@ struct IntelState {
     recovery_view: Option<PathBuf>,
     storage: Option<Box<store::ArchiveHealth>>,
     storage_loaded: bool,
+    storage_loading: bool,
+    storage_failed: bool,
     storage_smoke: bool,
     storage_smoke_error: Option<String>,
     schedule: Schedule,
@@ -478,19 +480,24 @@ impl Native {
     }
     fn load_storage(&mut self) -> Result<()> {
         let path = self.archive_path()?;
-        if selection(self.h(INTEL_MODE)) == DASHBOARD_MODE {
-            self.intel.storage = None;
-            self.intel.storage_loaded = false;
-            self.render_intel();
-        }
-        self.start_intel(move || {
+        self.intel.storage = None;
+        self.intel.storage_loaded = false;
+        self.intel.storage_loading = true;
+        self.intel.storage_failed = false;
+        let started = self.start_intel(move || {
             let info = if path.try_exists().map_err(|e| e.to_string())? {
                 Some(Box::new(Archive::reader(&path)?.health(&path)?))
             } else {
                 None
             };
             Ok(IntelReply::Storage(info))
-        })
+        });
+        if started.is_err() {
+            self.intel.storage_loading = false;
+            self.intel.storage_failed = true;
+        }
+        self.render_intel();
+        started
     }
     fn invalidate_archive_views(&mut self) {
         self.intel.archived = None;
@@ -500,6 +507,8 @@ impl Native {
         self.intel.history = None;
         self.intel.router_history = None;
         self.intel.storage_loaded = false;
+        self.intel.storage_loading = false;
+        self.intel.storage_failed = false;
         self.intel.storage = None;
         self.intel.alert_rows.clear();
         self.intel.alert_path = None;
@@ -929,6 +938,10 @@ impl Native {
             Err(TryRecvError::Disconnected) => Err("Pekerjaan analisis terhenti.".into()),
         };
         self.intel.work = None;
+        if self.intel.storage_loading {
+            self.intel.storage_loading = false;
+            self.intel.storage_failed = result.is_err();
+        }
         let mut notice = None;
         let mut reload_storage = false;
         match result {
@@ -1642,7 +1655,10 @@ impl Native {
             }
         };
         let age = |stamp: u64| {
-            if ni::now().saturating_sub(stamp) > ni::FRESH_SECONDS {
+            let now = ni::now();
+            if stamp > now {
+                "waktu ambigu"
+            } else if now - stamp > ni::FRESH_SECONDS {
                 "historis"
             } else {
                 "snapshot"
@@ -1796,11 +1812,20 @@ impl Native {
                     row(
                         [
                             "Arsip SQLite".into(),
-                            "Belum tersedia".into(),
+                            if self.intel.storage_loading {
+                                "Memuat arsip"
+                            } else if self.intel.storage_failed {
+                                "Gagal membaca arsip"
+                            } else if self.intel.storage_loaded {
+                                "Arsip belum ada"
+                            } else {
+                                "Belum dibaca"
+                            }
+                            .into(),
                             "Tidak diketahui".into(),
                             "Cari untuk membaca".into(),
                         ],
-                        "Tidak ada hasil pengukuran arsip yang dapat ditampilkan.".into(),
+                        "Tidak ada hasil pengukuran arsip saat ini. Gagal membaca tidak berarti database kosong.".into(),
                         STORAGE_MODE,
                     );
                 }
@@ -2768,6 +2793,16 @@ impl Native {
                                 "{settings}\nKuota hanya untuk DB utama. Perawatan berjalan saat collector aktif dan tidak memangkas file JSON lama."
                             )
                         },
+                    );
+                } else if self.intel.storage_loading || self.intel.storage_failed {
+                    let state = if self.intel.storage_loading {
+                        "Memuat arsip"
+                    } else {
+                        "Gagal membaca arsip"
+                    };
+                    push(
+                        [title.into(), state.into(), "Tidak diketahui".into(), "Muat ulang".into()],
+                        &|| "Tidak ada hasil pengukuran baru.".into(),
                     );
                 } else if self.intel.storage_loaded {
                     push(

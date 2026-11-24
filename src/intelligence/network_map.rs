@@ -515,50 +515,76 @@ impl LeaseTimeline {
     }
 }
 
-/// Count only observations with explicit interface attribution. DHCP server
-/// names are resolved only from complete server configuration, not guessed.
+/// Count only observations with explicit interface attribution and a
+/// contemporaneous configured prefix. A cached address or inactive lease
+/// is not proof that an endpoint is online or an address is free.
 pub fn subnets(s: &RouterSnapshot) -> super::overview::Subnets {
     let scope = Scoped::new(s);
     let mut index = super::overview::Index::default();
+    let address4 = observed(s, Table::Address4);
+    let address6 = observed(s, Table::Address6);
+    let vrf = observed(s, Table::Vrf);
+    let arp = observed(s, Table::Arp);
+    let nd = observed(s, Table::Neighbor6);
+    let leases = observed(s, Table::Lease);
+    let servers = observed(s, Table::DhcpServer);
+    let aligned = |source: Option<(u64, bool)>, stamp: u64| {
+        source.is_some_and(|(time, full)| full && time.abs_diff(stamp) <= 60)
+    };
     for r in &s.network.0 {
-        if !matches!(r.table, Table::Address4 | Table::Address6) || r.disabled {
+        let address = match r.table {
+            Table::Address4 => address4,
+            Table::Address6 => address6,
+            _ => continue,
+        };
+        if r.disabled {
             continue;
         }
-        if let Some((stamp, complete)) = observed(s, r.table)
-            && let Some((ip, bits)) = prefix(&r.subject)
-        {
-            // Other tables can be missing, so even a complete address response
-            // never means that all assignments in this subnet are known.
-            let partial = !complete
-                || [Table::Arp, Table::Neighbor6, Table::Lease, Table::DhcpServer]
-                    .iter()
-                    .any(|t| !observed(s, *t).is_some_and(|(time, full)| {
-                        full && time.abs_diff(stamp) <= 60
-                    }));
-            index.configure(
-                r.value.clone(),
-                scope.name(Some(&r.value)),
-                ip,
-                bits,
-                stamp,
-                partial,
-            );
-            index.observe(r.value.clone(), ip);
-        }
+        let Some((stamp, complete)) = address else {
+            continue;
+        };
+        let Some((ip, bits)) = prefix(&r.subject) else {
+            continue;
+        };
+        let vrf_known = aligned(vrf, stamp)
+            && scope.vrf.get(r.value.as_str()).is_some_and(Option::is_some);
+        let label = if vrf_known {
+            scope.name(Some(&r.value))
+        } else {
+            format!(
+                "{} · interface {} · VRF tidak diketahui",
+                s.authority, r.value
+            )
+        };
+        // DHCPv6 bindings/PD are not collected yet; IPv6 coverage is partial.
+        let partial = !complete
+            || !vrf_known
+            || ip.is_ipv6()
+            || !aligned(arp, stamp)
+            || !aligned(leases, stamp)
+            || !aligned(servers, stamp);
+        index.configure(r.value.clone(), label, ip, bits, stamp, partial);
+        index.observe(r.value.clone(), ip);
     }
     for h in &s.inventory {
-        let table = match h.source.as_str() {
-            "DHCPv4" => Table::Lease,
-            "ARP" => Table::Arp,
-            _ => Table::Neighbor6,
+        let evidence = match h.source.as_str() {
+            "DHCPv4" if h.active_binding => leases,
+            "ARP" => arp,
+            "IPv6 ND" => nd,
+            _ => continue,
         };
-        let Some((stamp, _)) = observed(s, table) else {
+        let Some((stamp, _)) = evidence else {
             continue;
         };
+        let address = if h.ip.is_ipv4() { address4 } else { address6 };
+        let Some((address_stamp, _)) = address else {
+            continue;
+        };
+        if stamp.abs_diff(address_stamp) > 60 {
+            continue;
+        }
         let interface = if h.source == "DHCPv4" {
-            if !observed(s, Table::DhcpServer)
-                .is_some_and(|(time, full)| full && time.abs_diff(stamp) <= 60)
-            {
+            if !aligned(servers, stamp) || !aligned(servers, address_stamp) {
                 continue;
             }
             h.location
@@ -703,6 +729,53 @@ mod tests {
         assert_ne!(same[0].scope, same[1].scope);
         assert!(same.iter().all(|r| r.observed == 1 && r.partial));
         assert!(view.rows.iter().any(|r| r.prefix.to_string() == "2001:db8::/64"));
+    }
+
+    #[test]
+    fn subnet_excludes_temporally_inconsistent_arp_and_inactive_lease() {
+        let mut s = RouterSnapshot::new(&Authority::parse("fixture.example.test").unwrap(), 200);
+        s.ingest(
+            Table::Address4,
+            Ok(br#"[{"address":"192.0.2.1/24","interface":"blue"}]"#.to_vec()),
+            200,
+        );
+        s.ingest(
+            Table::Arp,
+            Ok(br#"[{"address":"192.0.2.2","interface":"blue","mac-address":"02:11:22:33:44:55"}]"#.to_vec()),
+            139,
+        );
+        s.ingest(
+            Table::DhcpServer,
+            Ok(br#"[{"name":"dhcp","interface":"blue"}]"#.to_vec()),
+            200,
+        );
+        s.ingest(
+            Table::Lease,
+            Ok(br#"[{"address":"192.0.2.3","server":"dhcp","status":"waiting"},{"active-address":"192.0.2.4","active-server":"dhcp","active-mac-address":"02:11:22:33:44:66","status":"bound"}]"#.to_vec()),
+            200,
+        );
+        let view = subnets(&s);
+        assert_eq!(view.rows.len(), 1);
+        assert_eq!(view.rows[0].observed, 2);
+        assert!(view.rows[0].partial);
+    }
+
+    #[test]
+    fn subnet_does_not_infer_vrf_from_old_configuration() {
+        let mut s = RouterSnapshot::new(&Authority::parse("fixture.example.test").unwrap(), 200);
+        s.ingest(
+            Table::Address4,
+            Ok(br#"[{"address":"192.0.2.1/24","interface":"blue"}]"#.to_vec()),
+            200,
+        );
+        s.ingest(
+            Table::Vrf,
+            Ok(br#"[{"name":"blue-vrf","interfaces":"blue"}]"#.to_vec()),
+            100,
+        );
+        let view = subnets(&s);
+        assert!(view.rows[0].scope.contains("VRF tidak diketahui"));
+        assert!(view.rows[0].partial);
     }
 
     fn fixture() -> RouterSnapshot {

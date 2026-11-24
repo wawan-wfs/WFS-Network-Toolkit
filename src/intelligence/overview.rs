@@ -215,6 +215,14 @@ mod tests {
             "2^128"
         );
         assert!(Prefix::new("::".parse().unwrap(), 129).is_none());
+        let single = Prefix::new("2001:db8::1".parse().unwrap(), 128).unwrap();
+        assert_eq!(single.cardinality(), "1");
+        assert!(single.contains("2001:db8::1".parse().unwrap()));
+        assert!(!single.contains("2001:db8::2".parse().unwrap()));
+        let all = Prefix::new("192.0.2.1".parse().unwrap(), 0).unwrap();
+        assert_eq!(all.cardinality(), "4294967296");
+        assert!(all.contains("255.255.255.255".parse().unwrap()));
+        assert!(!all.contains("::1".parse().unwrap()));
     }
 
     #[test]

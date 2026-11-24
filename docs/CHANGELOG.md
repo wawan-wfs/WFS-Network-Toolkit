@@ -1,3 +1,12 @@
+# P1 corrective candidate — gate pending
+
+- Align subnet evidence timestamps and VRF mapping; exclude inactive DHCP leases from observed count.
+- Distinguish archive loading, absent and read failures; label future timestamps ambiguous.
+- Strengthen read-only CLI exit gate; add Rust regression fixtures (not yet executed).
+- Re-run identical SQLite contract: 9 passed; no release version bump.
+
+---
+
 # P1 dashboard and scoped IPv4/IPv6 subnet candidate
 
 - Baseline ae36e729 passed all Windows gates and produced a portable/installer.
