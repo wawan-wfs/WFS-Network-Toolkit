@@ -1811,8 +1811,22 @@ unsafe extern "system" fn wnd(h: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         _ => unsafe { DefWindowProcW(h, msg, wparam, lparam) },
     }
 }
+// CI uses a dedicated log because the GUI executable has no console.
+fn smoke_trace(message: &str) {
+    use std::io::Write;
+    if let Some(path) = std::env::var_os("WENET_SMOKE_LOG")
+        && let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+    {
+        let _ = writeln!(log, "{message}");
+    }
+}
 fn show_launch_error(error: &str, smoke: bool) {
-    if !smoke {
+    if smoke {
+        smoke_trace(&format!("FAIL: {error}"));
+    } else {
         popup(null_mut(), error, MB_OK | MB_ICONERROR);
     }
 }
@@ -1987,6 +2001,7 @@ fn start_ui(smoke: bool) -> Result<()> {
     Ok(())
 }
 fn smoke_ui(ui: &mut Native) -> Result<()> {
+    smoke_trace("Initial window and branding");
     if get(ui.h(HEADING)) != "Ringkasan"
         || send_native(ui.h(HOME_TEXT), LVM_GETITEMCOUNT, 0, 0) != 1
     {
@@ -1999,6 +2014,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     {
         return Err("Header, footer, atau pilihan restore awal tidak sesuai".into());
     }
+    smoke_trace("Notifications");
     ui.present_notice_with(Notice::Status("Membaca adaptor…".into()), |_, _, _, _| {
         panic!("Status rutin tidak boleh membuka dialog");
     });
@@ -2024,6 +2040,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         }
     }
     for (i, page) in PAGES.into_iter().enumerate() {
+        smoke_trace(&format!("Navigation: {page:?}"));
         if page == Page::Intel {
             // Smoke test is strictly read-only and does not open a network connection.
             ui.intel.local = Some(Box::new(nw::local_snapshot()));
@@ -2089,6 +2106,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     {
         return Err("Arsip kosong atau kontrol paginasi tidak tampil dengan benar.".into());
     }
+    smoke_trace("SQLite fixture and Detail IP");
     let dir = std::env::temp_dir().join(format!(
         "wfs-gui-smoke-{}-{}",
         std::process::id(),
@@ -2206,6 +2224,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         {
             return Err("Panel penyimpanan tidak menampilkan ukuran atau cakupan fixture.".into());
         }
+        smoke_trace("Backup and read-only recovery");
         let current = ui.primary_archive_path()?;
         let source = dir.join("copy.sqlite3");
         let target = dir.join("restored.sqlite3");
@@ -2226,6 +2245,53 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         if ui.intel.recovery_view.is_some() || ui.archive_path()? != current {
             return Err("Reset tidak kembali ke arsip utama.".into());
         }
+
+        // Alert mode loads asynchronously. Wait for its real worker, using only
+        // the temporary database; never inspect or acknowledge a user's alerts.
+        smoke_trace("Alert ledger load, acknowledge and filter");
+        let mut db = Archive::writer(&current)?;
+        let stamp = ni::now() as i64;
+        db.save_alerts(&[AlertRecord {
+            id: 0,
+            session: "smoke-session".into(),
+            serial: 1,
+            scope: "Lab / VRF biru".into(),
+            signal: "Template hilang".into(),
+            opened: stamp,
+            last_seen: stamp,
+            total: 1,
+            acknowledged: None,
+            recovered: None,
+        }])?;
+        drop(db);
+        select(ui.h(INTEL_MODE), ALERT_MODE);
+        ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
+        finish(ui)?;
+        if get(ui.h(INTEL_RECORD)) != "Akui"
+            || !get(ui.h(INTEL_STATUS)).contains("tanpa popup")
+            || send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 1
+            || ui.intel.alert_rows.len() != 1
+        {
+            return Err("Panel alert gagal memuat fixture.".into());
+        }
+        send_native(
+            ui.h(INTEL_TABLE),
+            LVM_SETITEMSTATE,
+            0,
+            &item as *const _ as isize,
+        );
+        ui.action(INTEL_RECORD, 0)?;
+        finish(ui)?;
+        let saved = Archive::reader(&current)?.alert_page("state=ack")?;
+        if saved.len() != 1 || saved[0].acknowledged.is_none() {
+            return Err("Pengakuan alert tidak tersimpan.".into());
+        }
+        set(ui.h(INTEL_FILTER), "state=open");
+        ui.action(INTEL_SEARCH, 0)?;
+        finish(ui)?;
+        if send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 0 {
+            return Err("Filter alert terbuka masih menampilkan alert yang diakui.".into());
+        }
         Ok(())
     })();
     ui.intel.archive_override = None;
@@ -2234,6 +2300,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         let _ = std::fs::remove_dir_all(dir);
     }
     journey?;
+    smoke_trace("RouterOS topology and IPAM fixtures");
     let auth = Authority::parse("fixture.example.test")?;
     let mut fixture = RouterSnapshot::new(&auth, 100);
     use ni::router::Table;
@@ -2300,11 +2367,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     if get(ui.h(INTEL_HISTORY)) != "Arsip UTC" || get(ui.h(INTEL_RECORD)) != "Sampel" {
         return Err("Kontrol histori tren tidak tampil.".into());
     }
-    select(ui.h(INTEL_MODE), ALERT_MODE);
-    ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
-    if get(ui.h(INTEL_RECORD)) != "Akui" || !get(ui.h(INTEL_STATUS)).contains("tanpa popup") {
-        return Err("Mode alert lokal tidak membuka panel yang benar.".into());
-    }
+    smoke_trace("Calculator, review and local inventory");
     ui.show_page(Page::Diag);
     set(ui.h(CALC_IP), "172.20.95.190");
     set(ui.h(CALC_MASK), "16");
@@ -2384,8 +2447,14 @@ pub fn run() {
         }
     }
     let smoke = args.as_slice() == ["--smoke-ui"];
+    if smoke {
+        smoke_trace("Starting native GUI smoke");
+    }
     if let Err(e) = start_ui(smoke) {
         show_launch_error(&e, smoke);
         std::process::exit(1);
+    }
+    if smoke {
+        smoke_trace("PASS: native GUI smoke");
     }
 }

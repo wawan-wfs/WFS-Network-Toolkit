@@ -825,7 +825,10 @@ impl Native {
                 Vec::new()
             };
             Ok(IntelReply::Alerts(path, rows))
-        })
+        })?;
+        // Clear stale rows from the previous mode while the worker is running.
+        self.render_intel();
+        Ok(())
     }
     fn intel_mode_labels(&self, mode: usize) {
         let storage = mode == STORAGE_MODE;

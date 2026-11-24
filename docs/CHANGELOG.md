@@ -1,3 +1,12 @@
+# Native GUI smoke recovery
+
+- All ten build gates and CLI passed on e561f864; native GUI smoke exited 1 without internal diagnostics.
+- Wait for async alert load in temporary SQLite fixture, verify persistent acknowledgement and state filter. Clear stale alert display.
+- Capture native smoke progress and internal errors as CI evidence without disabling or bypassing smoke. Manual-only Actions retained.
+- Candidate unchanged; new source requires manual build/smoke verification.
+
+---
+
 # Koreksi gate berdasarkan CI Windows manual
 
 - Terapkan diff rustfmt dari run 45426915628 pada 7 source files; tidak ada perubahan perilaku yang disengaja.

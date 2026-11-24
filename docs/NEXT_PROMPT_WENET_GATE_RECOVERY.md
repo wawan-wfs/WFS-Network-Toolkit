@@ -1,3 +1,9 @@
+# Latest checkpoint: native UI smoke gate
+
+All 10 build gates and CLI passed on e561f864 (run 45429043158); native GUI smoke failed with exit 1, installer skipped. Source fixes async alert smoke and adds gate-evidence/native-ui-smoke.log. Run manual workflow on newest main, inspect log stages and exact FAIL message, fix remaining actual errors, preserve smoke and packaging checks. Never interpret old build as passing newest commit. Only after full gate passes, proceed to P1 in the complete prompt below.
+
+---
+
 # Checkpoint terbaru — setelah koreksi format dari run 45426915628
 
 Gunakan HEAD main terbaru, bukan SHA lama. Artefak 14936888586 telah diperiksa. Baseline d511189e lulus 70 tes Rust, Clippy dan release build, tetapi tiga pemeriksaan format gagal. Koreksi berdasarkan diff telah diterapkan. Jalankan workflow manual pada HEAD baru; periksa setiap log termasuk ketiga format, CLI smoke, GUI smoke, NSIS dan checksum. Tidak ada klaim gate hijau sebelum run baru selesai. Jika gate lulus, lanjutkan P1 besar dari spesifikasi lengkap berikut. Jika gagal, perbaiki error aktual tanpa menurunkan gate. Pertahankan versi hingga verifikasi. Jangan rerun commit lama sebagai bukti HEAD baru.

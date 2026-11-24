@@ -1,3 +1,13 @@
+# WeNet Toolkit — native GUI gate recovery
+
+Run manual [45429043158](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45429043158), commit e561f864e01e53a9c47fdb537cb8d51fab854dc5, job 138568955282. All ten build gates passed, including three format checks, Clippy, unit tests and release build (72.828 s); read-only CLI passed. Native GUI smoke exited 1 after approximately one second, not a timeout. Packaging skipped. The log did not contain the internal assertion error, so the exact failing assertion is not known.
+
+Source inspection found a definite asynchronous test defect: selecting alert mode starts a SQLite worker but the old smoke test immediately asserted the completed panel and subsequently invoked other actions. The revised smoke waits for completion, tests a temporary archive with one alert, acknowledges it, checks persisted ACK, and verifies the open filter. The panel clears stale data while loading. GUI smoke now logs stage and internal failure to gate-evidence/native-ui-smoke.log; workflow prints it and still fails on a nonzero exit or missing log. No production archive is used by the alert test. This correction is uncompiled/unverified until the next manual run; do not assume the original exit 1 was solely caused by this defect. Installer remains unavailable. Keep all gates.
+
+[Original evidence](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45429043158/artifacts/14937951808)
+
+---
+
 # WeNet Toolkit — pemeriksaan CI manual 45426915628
 
 Baseline: d511189e7ef8e0ed169caa8c9e989a8d10d260f4. Run 45426915628 (workflow_dispatch), job 138561312745, artifact 14936888586. SHA256 ZIP: ec7c81a038b5a0bcc94b63b1b0f7e39c2beae60274ff9be347e49a5006b5664a. Semua 11 file artefak dibaca; hash cocok.

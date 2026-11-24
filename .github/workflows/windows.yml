@@ -23,12 +23,21 @@ jobs:
       - name: Smoke test native window and controls without changing network settings
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath .\target\release\WeNet-Toolkit.exe -ArgumentList '--smoke-ui' -PassThru
-          if (-not $p.WaitForExit(30000)) {
-            Stop-Process -Id $p.Id -Force
-            throw "Native UI smoke test timed out"
+          $env:WENET_SMOKE_LOG = Join-Path $PWD 'gate-evidence/native-ui-smoke.log'
+          try {
+            $p = Start-Process -FilePath .\target\release\WeNet-Toolkit.exe -ArgumentList '--smoke-ui' -PassThru
+            if (-not $p.WaitForExit(30000)) {
+              Stop-Process -Id $p.Id -Force
+              throw "Native UI smoke test timed out"
+            }
+            if ($p.ExitCode -ne 0) { throw "Native UI smoke test failed ($($p.ExitCode))" }
+            if (-not (Test-Path $env:WENET_SMOKE_LOG)) { throw 'Native UI smoke log missing' }
+          } finally {
+            if (Test-Path $env:WENET_SMOKE_LOG) {
+              Get-Content $env:WENET_SMOKE_LOG
+            }
+            Remove-Item Env:WENET_SMOKE_LOG -ErrorAction SilentlyContinue
           }
-          if ($p.ExitCode -ne 0) { throw "Native UI smoke test failed ($($p.ExitCode))" }
       - name: Package portable and installer
         shell: pwsh
         run: |
