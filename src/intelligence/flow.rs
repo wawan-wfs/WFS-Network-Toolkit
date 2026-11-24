@@ -530,10 +530,12 @@ pub struct Stats {
     pub archive_duplicate: u64,
     pub archive_pruned: u64,
     pub archive_error: Option<String>,
+    pub alert_error: Option<String>,
 }
 #[derive(Default)]
 struct Buffer {
     stats: Stats,
+    profile_stats: BTreeMap<(IpAddr, u32), Stats>,
     flows: VecDeque<Flow>,
 }
 pub struct Collector {
@@ -542,6 +544,7 @@ pub struct Collector {
     data: Arc<Mutex<Buffer>>,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
+    alert_worker: Option<thread::JoinHandle<()>>,
 }
 impl Drop for Collector {
     fn drop(&mut self) {
@@ -549,8 +552,70 @@ impl Drop for Collector {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        if let Some(worker) = self.alert_worker.take() {
+            let _ = worker.join();
+        }
     }
 }
+fn monitor_alerts(
+    path: &Path,
+    profiles: &[Profile],
+    state: &Mutex<Buffer>,
+    cancel: &AtomicBool,
+    counters: Option<&super::store::WriterStats>,
+) {
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use super::{alert_ledger::Tracker, store::Archive};
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let mut tracker = Tracker::new(format!("{}-{nonce}", std::process::id()));
+    let scopes: Vec<_> = profiles.iter().map(|p| {
+        let scope = serde_json::to_string(&(
+            &p.config.site, &p.vrf, &p.id, p.config.exporter, p.config.observation_domain,
+        )).expect("profile scope can be encoded");
+        ((p.config.exporter, p.config.observation_domain), scope)
+    }).collect();
+    loop {
+        let now = Instant::now();
+        let utc = super::now();
+        let snapshot = match state.lock() {
+            Ok(s) => s.profile_stats.clone(),
+            Err(_) => return,
+        };
+        for (key, scope) in &scopes {
+            if let Some(stats) = snapshot.get(key) {
+                tracker.sample(scope, now, utc, stats, false);
+            }
+        }
+        if let Some(w) = counters {
+            let stats = Stats {
+                archived: w.written.load(Ordering::Relaxed),
+                archive_queue_full: w.queue_full.load(Ordering::Relaxed),
+                archive_writer_closed: w.writer_closed.load(Ordering::Relaxed),
+                archive_sqlite_failed: w.sqlite_failed.load(Ordering::Relaxed),
+                ..Default::default()
+            };
+            tracker.sample("Collector (semua exporter)", now, utc, &stats, true);
+        }
+        if !tracker.dirty.is_empty() {
+            let rows: Vec<_> = tracker.dirty.values().cloned().collect();
+            let result = Archive::writer(path).and_then(|mut db| db.save_alerts(&rows));
+            if let Ok(mut s) = state.lock() {
+                s.stats.alert_error = match result {
+                    Ok(()) => {
+                        tracker.dirty.clear();
+                        tracker.overflow.then(|| "Antrean alert pernah penuh; histori parsial.".into())
+                    }
+                    Err(e) => Some(format!("Alert belum tersimpan: {e}")),
+                };
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
 impl Collector {
     pub fn start(config: FlowConfig) -> Result<Self> {
         Self::start_group(CollectorConfig::legacy(config), None)
@@ -570,7 +635,10 @@ impl Collector {
         sock.set_read_timeout(Some(Duration::from_millis(300)))
             .map_err(|e| e.to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
-        let data = Arc::new(Mutex::new(Buffer::default()));
+        let data = Arc::new(Mutex::new(Buffer {
+            profile_stats: allowed.keys().map(|key| (*key, Stats::default())).collect(),
+            ..Default::default()
+        }));
         let (cancel, out) = (stop.clone(), data.clone());
         let worker = thread::Builder::new()
             .name("wfs-flow-udp".into())
@@ -616,6 +684,19 @@ impl Collector {
                                 }));
                             }
                             let Ok(mut data) = out.lock() else { return };
+                            // Attribution is valid only after the allowlisted IP/domain match.
+                            if let Some(stats) = data.profile_stats.get_mut(&(peer.ip(), domain)) {
+                                match &decoded {
+                                    Ok(b) if b.duplicate => stats.duplicate += 1,
+                                    Ok(b) => {
+                                        stats.accepted_datagrams += 1;
+                                        stats.last_received = Some(now);
+                                        stats.missing_templates += u64::from(b.missing);
+                                        stats.skipped += u64::from(b.skipped);
+                                    }
+                                    Err(_) => stats.invalid += 1,
+                                }
+                            }
                             match decoded {
                                 Ok(b) if b.duplicate => data.stats.duplicate += 1,
                                 Ok(b) => {
@@ -651,16 +732,47 @@ impl Collector {
                 }
             })
             .map_err(|e| e.to_string())?;
+        let alert_worker = if let Some(path) = archive {
+            let path = path.to_path_buf();
+            let profiles = config.profiles.clone();
+            let state = data.clone();
+            let cancel = stop.clone();
+            let counters = archive_stats.clone();
+            match thread::Builder::new().name("wfs-alert-ledger".into()).spawn(move || {
+                monitor_alerts(&path, &profiles, &state, &cancel, counters.as_deref());
+            }) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    stop.store(true, Ordering::Relaxed);
+                    let _ = worker.join();
+                    return Err(format!("Monitor alert tidak dapat dimulai: {e}"));
+                }
+            }
+        } else {
+            None
+        };
         Ok(Self {
             config,
             archive_stats,
             data,
             stop,
             worker: Some(worker),
+            alert_worker,
         })
     }
     pub fn stats(&self) -> Stats {
         self.read_buffer(false).0
+    }
+
+    pub fn source_stats(&self) -> Vec<(String, Stats)> {
+        let Ok(b) = self.data.lock() else { return Vec::new() };
+        self.config.profiles.iter().filter_map(|p| {
+            let stats = b.profile_stats.get(&(p.config.exporter, p.config.observation_domain))?;
+            let label = format!("{} / {} / {} / {} #{}", p.config.site,
+                p.vrf.as_deref().unwrap_or("VRF tidak diketahui"),
+                p.id, p.config.exporter, p.config.observation_domain);
+            Some((label, stats.clone()))
+        }).collect()
     }
     pub fn snapshot(&self) -> (Stats, Vec<Flow>) {
         self.read_buffer(true)

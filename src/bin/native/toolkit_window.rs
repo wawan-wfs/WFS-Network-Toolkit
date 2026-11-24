@@ -973,7 +973,7 @@ impl Native {
                     normal && self.intel.recovery_view.is_none() && self.intel.collector.is_none()
                 }
                 INTEL_RECORD if selection(self.h(INTEL_MODE)) == ALERT_MODE => {
-                    normal && !self.intel.alerts.events.is_empty()
+                    normal && self.intel.recovery_view.is_none() && !self.intel.alert_rows.is_empty()
                 }
                 INTEL_RECORD
                     if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) =>
@@ -1395,7 +1395,9 @@ impl Native {
                 // Only close the existing window after UAC has succeeded.
                 // The child waits for this process to exit before showing the GUI.
                 w::elevate_window()?;
-                if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                // No background task can be active here; quit the message loop directly
+                // instead of a WM_CLOSE that may be suppressed by GWLP_USERDATA.
+                if unsafe { PostMessageW(self.hwnd, WM_APP + 3, 0, 0) } == 0 {
                     return Err("Gagal menutup jendela lama; periksa aplikasi yang sudah berjalan.".into());
                 }
                 return Ok(());
@@ -1895,6 +1897,10 @@ fn start_ui(smoke: bool) -> Result<()> {
             break;
         }
         match (m.hwnd == h, m.message, m.wParam) {
+            (true, msg, _) if msg == WM_APP + 3 => {
+                unsafe { DestroyWindow(h); }
+                break;
+            }
             (true, SYNC_LAYOUT, _) => ui.layout(),
             (true, DRAW_ACTION, p) => {
                 if let Err(e) = ui.action((p & 0xffff) as i32, (p >> 16) as u16) {
@@ -1917,7 +1923,6 @@ fn start_ui(smoke: bool) -> Result<()> {
             (true, WM_TIMER, PULSE) => {
                 ui.finish_refresh();
                 ui.finish_intel();
-                ui.observe_collector_health();
                 ui.poll_router_step();
                 if let Some(r) = ui.model.finish() {
                     ui.reply(r);

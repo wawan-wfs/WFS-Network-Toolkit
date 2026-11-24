@@ -28,9 +28,10 @@ pub const RETAIN_DAYS: u64 = 30;
 pub const PAGE_SIZE: usize = 200;
 pub const EXPORT_LIMIT: usize = 10_000;
 const BATCH_SIZE: usize = 256;
-const QUEUE_BATCHES: usize = 32;
+// Bounded capacity; still report overload rather than silently discard it.
+const QUEUE_BATCHES: usize = 256;
 
-const VERSION: i64 = 2;
+const VERSION: i64 = 4;
 const APP_ID: i64 = 0x5746534E; // WFSN
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -245,7 +246,7 @@ impl Archive {
         let id: i64 = conn
             .pragma_query_value(None, "application_id", |r| r.get(0))
             .map_err(error)?;
-        if (1..=VERSION).contains(&version) && id == APP_ID {
+        if matches!(version, 1 | 2 | VERSION) && id == APP_ID {
             return Ok(version);
         }
         if allow_empty && version == 0 && id == 0 {
@@ -287,13 +288,16 @@ impl Archive {
             0 => tx
                 .execute_batch(include_str!("sql/001.sql"))
                 .map_err(error)?,
-            1 | VERSION => {}
+            1 | 2 | VERSION => {}
             _ => return Err("Versi schema arsip tidak didukung.".into()),
         }
         tx.execute_batch("CREATE TABLE IF NOT EXISTS archive_policy (id INTEGER PRIMARY KEY CHECK(id=1),flow_days INTEGER NOT NULL,snapshot_days INTEGER NOT NULL,quota_mib INTEGER NOT NULL);").map_err(error)?;
         if current < 2 {
             tx.execute_batch(include_str!("sql/002.sql"))
                 .map_err(error)?;
+        }
+        if current < VERSION {
+            tx.execute_batch(include_str!("sql/004.sql")).map_err(error)?;
         }
         tx.commit().map_err(error)?;
         let archive = Self { conn };
@@ -310,6 +314,65 @@ impl Archive {
         Self::verify(&conn, false)?;
         Ok(Self { conn })
     }
+    pub fn save_alerts(&mut self, records: &[super::alert_ledger::Record]) -> Result<()> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
+        let policy = Self::read_policy(&tx)?;
+        Self::set_quota(&tx, policy)?;
+        let cutoff = sql_time(super::now().saturating_sub(policy.snapshot_days * 86400));
+        tx.execute("DELETE FROM collector_alerts WHERE last_seen < ?1", [cutoff]).map_err(error)?;
+        for r in records.iter().filter(|r| r.last_seen >= cutoff) {
+            tx.execute("INSERT INTO collector_alerts(session,serial,scope,signal,opened,last_seen,total,recovered)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session,serial) DO UPDATE SET
+last_seen=max(collector_alerts.last_seen,excluded.last_seen),
+total=max(collector_alerts.total,excluded.total),
+recovered=coalesce(collector_alerts.recovered,excluded.recovered)",
+                params![r.session, r.serial, r.scope, r.signal, r.opened, r.last_seen, r.total, r.recovered]).map_err(error)?;
+        }
+        // Retain a bounded recent ledger, including unacknowledged incidents.
+        tx.execute("DELETE FROM collector_alerts WHERE id IN (SELECT id FROM collector_alerts ORDER BY last_seen DESC,id DESC LIMIT -1 OFFSET ?1)", [super::alert_ledger::MAX_ALERTS as i64]).map_err(error)?;
+        tx.commit().map_err(error)
+    }
+
+    pub fn alert_page(&self, filter: &str) -> Result<Vec<super::alert_ledger::Record>> {
+        if Self::verify(&self.conn, false)? < VERSION {
+            return Ok(Vec::new());
+        }
+        if filter.len() > 512 {
+            return Err("Filter alert terlalu panjang.".into());
+        }
+        let mut stmt = self.conn.prepare("SELECT id,session,serial,scope,signal,opened,last_seen,total,acknowledged,recovered FROM collector_alerts WHERE instr(lower(scope || ' ' || signal || ' ' || CASE WHEN recovered IS NOT NULL THEN 'Pulih teramati' WHEN acknowledged IS NOT NULL THEN 'Diakui' ELSE 'Belum diakui' END),lower(?1)) > 0 ORDER BY last_seen DESC,id DESC LIMIT ?2").map_err(error)?;
+        let rows = stmt.query_map(params![filter, super::alert_ledger::PAGE as i64], |r| {
+            Ok(super::alert_ledger::Record {
+                id: r.get(0)?, session: r.get(1)?, serial: r.get(2)?,
+                scope: r.get(3)?, signal: r.get(4)?, opened: r.get(5)?,
+                last_seen: r.get(6)?, total: r.get(7)?, acknowledged: r.get(8)?,
+                recovered: r.get(9)?,
+            })
+        }).map_err(error)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(error)
+    }
+
+    // Open an existing archive without creating or migrating it on an ACK action.
+    pub fn alert_writer(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(error)?;
+        conn.busy_timeout(Duration::from_millis(1500)).map_err(error)?;
+        conn.execute_batch("PRAGMA trusted_schema=OFF;").map_err(error)?;
+        if Self::verify(&conn, false)? != VERSION {
+            return Err("Arsip perlu dimigrasikan melalui operasi penyimpanan sebelum mengakui alert.".into());
+        }
+        Ok(Self { conn })
+    }
+
+    pub fn acknowledge_alert(&self, record: &super::alert_ledger::Record, utc: u64) -> Result<()> {
+        let changed = self.conn.execute("UPDATE collector_alerts SET acknowledged=coalesce(acknowledged,max(opened,?1))
+WHERE id=?2 AND session=?3 AND serial=?4", params![sql_time(utc),record.id,record.session,record.serial]).map_err(error)?;
+        if changed != 1 {
+            return Err("Alert sudah tidak tersedia. Muat ulang daftar.".into());
+        }
+        Ok(())
+    }
+
     pub fn save_router_sample(&mut self, sample: &super::router_history::Sample) -> Result<()> {
         use super::router_history::{MAX_BYTES, MAX_ROUTERS, SAMPLES_PER_ROUTER};
         let payload = serde_json::to_string(sample).map_err(error)?;
@@ -651,8 +714,12 @@ impl Archive {
                 [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
             )
             .map_err(error)?;
+        let alerts = tx.execute(
+            "DELETE FROM collector_alerts WHERE last_seen < ?1",
+            [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
+        ).map_err(error)?;
         tx.commit().map_err(error)?;
-        Ok(flows + snapshots + router_samples)
+        Ok(flows + snapshots + router_samples + alerts)
     }
     pub fn prune(&self, now: u64, days: u64) -> Result<usize> {
         Self::prune_in(&self.conn, Kind::Flow, now, days)
@@ -777,6 +844,9 @@ impl Archive {
                     r.get::<_, i64>(0)
                 })
                 .map_err(error)?;
+        }
+        if Self::verify(&self.conn, false)? == VERSION {
+            self.conn.query_row("SELECT count(*) FROM collector_alerts", [], |r| r.get::<_, i64>(0)).map_err(error)?;
         }
 
         Ok(())
@@ -1208,7 +1278,7 @@ mod tests {
         assert_eq!(read.router_history(&a, 0, now).unwrap().samples, 0);
         drop(read);
         let mut db = Archive::writer(&path).unwrap();
-        assert_eq!(Archive::verify(&db.conn, false).unwrap(), 2);
+        assert_eq!(Archive::verify(&db.conn, false).unwrap(), VERSION);
         db.insert(&[row("legacy-kind", base, 0)]).unwrap();
         assert!(
             db.save_router_sample(&router_sample(
@@ -1308,6 +1378,77 @@ mod tests {
         assert_eq!(stats.writer_closed.load(Ordering::Relaxed), 3);
         assert_eq!(stats.sqlite_failed.load(Ordering::Relaxed), 5);
         assert_eq!(stats.dropped.load(Ordering::Relaxed), 20);
+    }
+
+    #[test]
+    fn ledger_migrates_v2_and_ack_survives_replay_and_backup() {
+        use super::super::alert_ledger::Record;
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let backup = path.with_file_name("ledger-backup.sqlite3");
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(include_str!("sql/001.sql")).unwrap();
+        old.execute_batch(include_str!("sql/002.sql")).unwrap();
+        drop(old);
+        assert!(Archive::reader(&path).unwrap().alert_page("").unwrap().is_empty());
+        assert!(Archive::alert_writer(&path).is_err());
+        let mut db = Archive::writer(&path).unwrap();
+        assert_eq!(Archive::verify(&db.conn, false).unwrap(), VERSION);
+        let now = super::super::now();
+        let mut rec = Record {
+            id: 0,
+            session: "fixture-a".into(),
+            serial: 1,
+            scope: "[site,vrf-a,router-a,192.0.2.1,9]".into(),
+            signal: "Template hilang".into(),
+            opened: now as i64,
+            last_seen: now as i64,
+            total: 1,
+            acknowledged: None,
+            recovered: None,
+        };
+        let mut other = rec.clone();
+        other.serial = 2;
+        other.scope = "[site,vrf-b,router-b,192.0.2.1,9]".into();
+        db.save_alerts(&[rec.clone(), other]).unwrap();
+        let mut page = db.alert_page("vrf-a").unwrap();
+        assert_eq!(page.len(), 1);
+        let saved = page.remove(0);
+        db.acknowledge_alert(&saved, now + 1).unwrap();
+        db.acknowledge_alert(&saved, now + 2).unwrap();
+        rec.total = 5;
+        rec.last_seen += 5;
+        rec.recovered = Some(rec.last_seen);
+        db.save_alerts(&[rec]).unwrap();
+        db.backup_to(&backup).unwrap();
+        drop(db);
+        let read = Archive::reader(&backup).unwrap();
+        let saved = read.alert_page("vrf-a").unwrap().remove(0);
+        assert_eq!(saved.acknowledged, Some((now + 1) as i64));
+        assert_eq!(saved.total, 5);
+        assert_eq!(saved.status(), "Pulih teramati");
+        assert!(read.acknowledge_alert(&saved, now + 10).is_err());
+        assert_eq!(read.alert_page("vrf-b").unwrap().len(), 1);
+        drop(read);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn unknown_legacy_schema_three_is_not_silently_migrated() {
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(include_str!("sql/001.sql")).unwrap();
+        old.execute_batch(include_str!("sql/002.sql")).unwrap();
+        old.pragma_update(None, "user_version", 3).unwrap();
+        drop(old);
+        assert!(Archive::reader(&path).is_err());
+        assert!(Archive::writer(&path).is_err());
+        let raw = Connection::open(&path).unwrap();
+        let version: i64 = raw.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, 3);
+        drop(raw);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     fn row(site: &str, received: u64, ordinal: u32) -> ArchiveRow {

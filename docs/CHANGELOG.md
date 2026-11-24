@@ -1,5 +1,12 @@
 # Catatan rilis WFS Network Toolkit
 
+## 1.3.0-rc.1 — kandidat pemulihan (belum build)
+
+- Rekonstruksi ledger alert per profil/site/VRF/IP/domain, penyimpanan schema 4 dan pengakuan persisten; schema 3 lama belum didukung.
+- Monitor terpisah, debounce, retensi dan pembatasan histori, status pemulihan berbasis observasi, pembacaan backup dan filter.
+- Antrean writer dibatasi 256 batch (belum benchmark). Handoff Admin menutup lewat loop pesan; metadata EXE diselaraskan.
+- Tes kontrak SQL offline dan kasus unit Rust ditambahkan. Gate Rust/Windows belum dijalankan. CI tetap manual.
+
 ## 1.2.1
 
 - Mode Admin: child menunggu PID jendela lama selesai setelah UAC berhasil, sehingga tidak membuka dua GUI bersamaan; UAC ditolak mempertahankan sesi biasa.

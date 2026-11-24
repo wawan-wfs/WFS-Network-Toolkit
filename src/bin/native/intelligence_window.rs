@@ -1,7 +1,7 @@
 use wfs_network_toolkit::intelligence::{
     self as ni, Assessment, Coverage, EndpointState, LocalSnapshot, Probe, TrafficImport,
     archive_ops::{DeletePreview, Kind, Policy, RecoveryPlan, check_recovery_destination},
-    collector_alerts::{Alerts, Signal},
+    alert_ledger::Record as AlertRecord,
     device::{Inspection, ObservedScope},
     flow::{self, Collector, CollectorConfig},
     history,
@@ -93,6 +93,7 @@ enum IntelReply {
     Collector(Collector),
     History(history::History),
     Stopped,
+    Alerts(PathBuf, Vec<AlertRecord>),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -120,8 +121,8 @@ struct IntelState {
     details: Vec<String>,
     filter: String,
     collector: Option<Collector>,
-    alerts: Alerts,
-    last_alert_check: Option<std::time::Instant>,
+    alert_rows: Vec<AlertRecord>,
+    alert_path: Option<PathBuf>,
     history: Option<history::History>,
     archived: Option<store::Page>,
     archive_query: Option<Query>,
@@ -489,6 +490,8 @@ impl Native {
         self.intel.router_history = None;
         self.intel.storage_loaded = false;
         self.intel.storage = None;
+        self.intel.alert_rows.clear();
+        self.intel.alert_path = None;
     }
     fn storage_action(&mut self, id: i32) -> Result<bool> {
         const FILTER: &str = "SQLite WFS (*.sqlite3)\0*.sqlite3\0";
@@ -811,22 +814,18 @@ impl Native {
             Ok(IntelReply::RouterHistory(key, Box::new(views)))
         })
     }
-    fn observe_collector_health(&mut self) {
-        let now = std::time::Instant::now();
-        let Some(collector) = self.intel.collector.as_ref() else {
-            return;
-        };
-        if self
-            .intel
-            .last_alert_check
-            .is_some_and(|t| now.saturating_duration_since(t) < std::time::Duration::from_secs(1))
-        {
-            return;
-        }
-        self.intel.last_alert_check = Some(now);
-        self.intel
-            .alerts
-            .observe(now, ni::now(), &collector.stats());
+    fn load_alerts(&mut self, filter: String) -> Result<()> {
+        let path = self.archive_path()?;
+        self.intel.alert_rows.clear();
+        self.intel.alert_path = None;
+        self.start_intel(move || {
+            let rows = if path.try_exists().map_err(|e| e.to_string())? {
+                Archive::reader(&path)?.alert_page(&filter)?
+            } else {
+                Vec::new()
+            };
+            Ok(IntelReply::Alerts(path, rows))
+        })
     }
     fn intel_mode_labels(&self, mode: usize) {
         let storage = mode == STORAGE_MODE;
@@ -879,6 +878,7 @@ impl Native {
                 STORAGE_MODE => "30 7 256  |  flow UTC-awal UTC-akhir",
                 POLL_MODE => "Interval detik (default 120)",
                 TREND_MODE | LEASE_MODE => "Filter sesi atau dua detik UTC untuk Arsip",
+                ALERT_MODE => "Site, VRF, sinyal atau status",
                 _ => "Cari IP, port, PID…",
             })
             .as_ptr() as isize,
@@ -944,13 +944,18 @@ impl Native {
                 select(self.h(INTEL_MODE), 0);
             }
             Ok(IntelReply::Collector(c)) => {
-                self.intel.alerts = Alerts::default();
-                self.intel.last_alert_check = None;
+                self.intel.alert_rows.clear();
+                self.intel.alert_path = None;
                 self.intel.collector = Some(c);
-                self.observe_collector_health();
                 select(self.h(INTEL_MODE), 13);
             }
             Ok(IntelReply::Stopped) => {}
+            Ok(IntelReply::Alerts(path, rows)) => {
+                if self.archive_path().is_ok_and(|current| current == path) {
+                    self.intel.alert_path = Some(path);
+                    self.intel.alert_rows = rows;
+                }
+            }
             Ok(IntelReply::Archive(p, q)) => {
                 self.intel.archived = Some(p);
                 self.intel.archive_query = Some(*q);
@@ -1113,6 +1118,10 @@ impl Native {
                     self.intel.previous_mode = None;
                     self.intel.pivot_scope = None;
                     self.intel.filter.clear();
+                    if mode == ALERT_MODE {
+                        self.intel.alert_rows.clear();
+                        self.intel.alert_path = None;
+                    }
                     let input = if mode == DEVICE_MODE {
                         self.intel.device_input.as_str()
                     } else {
@@ -1166,6 +1175,10 @@ impl Native {
                         }
                     }
                     POLL_MODE => self.render_intel(),
+                    ALERT_MODE => {
+                        self.intel.filter = input.clone();
+                        self.load_alerts(input)?;
+                    }
                     _ => {
                         self.intel.filter = input;
                         self.render_intel();
@@ -1386,20 +1399,22 @@ impl Native {
                 })?;
             }
             INTEL_RECORD if selection(self.h(INTEL_MODE)) == ALERT_MODE => {
-                let row = self
-                    .selected_intel_row()
-                    .ok_or("Pilih alert yang ingin diakui.")?;
-                let id = self
-                    .intel
-                    .alerts
-                    .events
-                    .iter()
-                    .rev()
-                    .nth(row)
-                    .map(|e| e.id)
-                    .ok_or("Alert tidak tersedia.")?;
-                self.intel.alerts.acknowledge(id);
-                self.render_intel();
+                if self.intel.recovery_view.is_some() {
+                    return Err("Salinan arsip hanya-baca.".into());
+                }
+                let path = self.primary_archive_path()?;
+                if self.intel.alert_path.as_ref() != Some(&path) {
+                    return Err("Muat ulang alert dari arsip utama.".into());
+                }
+                let row = self.selected_intel_row().ok_or("Pilih alert yang ingin diakui.")?;
+                let record = self.intel.alert_rows.get(row).cloned().ok_or("Alert tidak tersedia.")?;
+                let filter = self.intel.filter.clone();
+                self.start_intel(move || {
+                    let db = Archive::alert_writer(&path)?;
+                    db.acknowledge_alert(&record, ni::now())?;
+                    let rows = db.alert_page(&filter)?;
+                    Ok(IntelReply::Alerts(path, rows))
+                })?;
             }
             INTEL_RECORD => {
                 let path = self.archive_path()?;
@@ -2029,6 +2044,24 @@ impl Native {
                                     )
                                 },
                             );
+                            for (scope, source) in collector.source_stats() {
+                                push(
+                                    [
+                                        scope.clone(),
+                                        "Exporter / domain".into(),
+                                        if source.accepted_datagrams == 0 {
+                                            "Belum ada datagram diterima".into()
+                                        } else {
+                                            "Pernah teramati".into()
+                                        },
+                                        format!("{} datagram · {} template hilang", source.accepted_datagrams, source.missing_templates),
+                                    ],
+                                    &|| format!(
+                                        "{scope}\nDiterima {} · parser ditolak {} · duplikat {} · template hilang {}\nTerakhir UTC {}. Tidak ada datagram bukan bukti router putus. Drop arsip global tidak diatribusikan ke profil ini.",
+                                        source.accepted_datagrams, source.invalid, source.duplicate, source.missing_templates, display_opt(source.last_received)
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -2219,39 +2252,22 @@ impl Native {
                 "Isi host dan interval. Mulai atau hentikan target. Polling tidak aktif otomatis setelah keluar."
             }
             ALERT_MODE => {
-                for event in self.intel.alerts.events.iter().rev() {
-                    let state = if event.acknowledged {
-                        "Diakui"
-                    } else {
-                        "Belum diakui"
-                    };
-                    let detail = if event.signal == Signal::Stale {
-                        "Tidak ada kenaikan penghitung datagram diterima selama 300 detik. Bukan bukti exporter putus."
-                    } else {
-                        "Counter kumulatif collector dalam sesi ini."
-                    };
+                for event in &self.intel.alert_rows {
+                    let status = event.status();
                     push(
                         [
-                            event.signal.label().into(),
-                            format!("UTC {}", event.utc),
-                            state.into(),
-                            format!("{} · #{}", event.total, event.id),
+                            event.signal.clone(),
+                            event.scope.clone(),
+                            status.into(),
+                            format!("UTC {} · {}", event.last_seen, event.total),
                         ],
-                        &|| {
-                            format!(
-                                "{} · {}\nUTC {}\n{detail}\nTidak memicu perubahan jaringan.",
-                                event.signal.label(),
-                                state,
-                                event.utc
-                            )
-                        },
+                        &|| format!(
+                            "{}\nCakupan (site/VRF/profil/IP/domain): {}\nSesi {} · #{}\nDibuka UTC {} · terakhir UTC {} · total {}\nDiakui {:?} · pulih {:?}\nStatus: {}. Tidak membuktikan router putus. Tidak memicu perubahan jaringan.",
+                            event.signal,event.scope,event.session,event.serial,event.opened,event.last_seen,event.total,event.acknowledged,event.recovered,status
+                        ),
                     );
                 }
-                if self.intel.alerts.limited {
-                    "Histori parsial. Maksimal 64 alert sesi. Tekan Cari untuk menyegarkan."
-                } else {
-                    "Alert lokal tanpa popup. Tekan Cari untuk menyegarkan, atau Akui untuk menandai."
-                }
+                "Alert persisten tanpa popup. Cari memuat maksimal 1.000 terbaru (filter scope/status/sinyal). Pulih berarti observasi membaik; sesi lama tidak dinilai pulih otomatis."
             }
             TOPOLOGY_MODE | IPAM_MODE | LEASE_MODE => {
                 let observations: Box<dyn Iterator<Item = &Observation>> =
@@ -2673,7 +2689,7 @@ impl Native {
         set(
             self.h(INTEL_STATUS),
             &format!(
-                "{}/{} · {description}{}",
+                "{}/{} · {description}{}{}",
                 visible.len(),
                 matched,
                 self.intel
@@ -2683,7 +2699,13 @@ impl Native {
                     .map_or(String::new(), |(router, v)| format!(
                         " {router} · {} sampel.",
                         v.samples
-                    ))
+                    )),
+                if mode == ALERT_MODE {
+                    self.intel.collector.as_ref().and_then(|c| c.stats().alert_error)
+                        .map_or(String::new(), |e| format!(" · {e}"))
+                } else {
+                    String::new()
+                }
             ),
         );
     }

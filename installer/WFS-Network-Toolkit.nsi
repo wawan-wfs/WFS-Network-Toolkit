@@ -17,9 +17,9 @@ Unicode true
   !define HARDWARE_GUIDE "../docs/HARDWARE_ACCEPTANCE.md"
 !endif
 !ifndef OUT_FILE
-  !define OUT_FILE "../dist/WFS-Network-Toolkit-1.2.1-x64-Setup.exe"
+  !define OUT_FILE "../dist/WFS-Network-Toolkit-1.3.0-rc.1-x64-Setup.exe"
 !endif
-Name "WFS Network Toolkit 1.2.1"
+Name "WFS Network Toolkit 1.3.0-rc.1"
 OutFile "${OUT_FILE}"
 InstallDir "$PROGRAMFILES64\WFS Network Toolkit"
 InstallDirRegKey HKLM "Software\WFS\NetworkToolkit\Installer" "Path"
@@ -27,13 +27,13 @@ RequestExecutionLevel admin
 !define MUI_ICON "../assets/WFS-Network-Toolkit.ico"
 !define MUI_UNICON "../assets/WFS-Network-Toolkit.ico"
 SetCompressor /SOLID lzma
-VIProductVersion "1.2.1.0"
+VIProductVersion "1.3.0.0"
 VIAddVersionKey "ProductName" "WFS Network Toolkit"
 VIAddVersionKey "FileDescription" "Pemasang WFS Network Toolkit"
-VIAddVersionKey "FileVersion" "1.2.1.0"
+VIAddVersionKey "FileVersion" "1.3.0.0"
 VIAddVersionKey "LegalCopyright" "© WFS Project"
 VIAddVersionKey "CompanyName" "WFS Project"
-VIAddVersionKey "ProductVersion" "1.2.1"
+VIAddVersionKey "ProductVersion" "1.3.0-rc.1"
 !define MUI_WELCOMEPAGE_TITLE "WFS Network Toolkit"
 !define MUI_WELCOMEPAGE_TEXT "Klik Berikutnya untuk memilih folder instalasi.$\r$\n$\r$\n© WFS Project"
 !insertmacro MUI_PAGE_WELCOME
@@ -68,7 +68,7 @@ Section "WFS Network Toolkit"
   File "${HARDWARE_GUIDE}"
   WriteRegStr HKLM "Software\WFS\NetworkToolkit\Installer" "Path" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "DisplayName" "WFS Network Toolkit"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "DisplayVersion" "1.2.1"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "DisplayVersion" "1.3.0-rc.1"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "Publisher" "WFS Project"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\WFSNetworkToolkit" "DisplayIcon" "$INSTDIR\WFS-Network-Toolkit.exe"

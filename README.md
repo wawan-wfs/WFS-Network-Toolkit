@@ -1,12 +1,14 @@
-# WFS Network Toolkit 1.2.0
+# WFS Network Toolkit 1.3.0-rc.1 (kandidat pemulihan)
 
 WFS Project · Windows 10/11 x64
 
 ## Buka aplikasi
 
-Buka [Actions Windows untuk `main`](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/workflows/windows.yml?query=branch%3Amain), pilih run 1.2.0 yang hijau, lalu unduh paket Windows pada **Artifacts**. Login GitHub mungkin diperlukan.
+Belum tersedia executable dari kandidat ini. Jalankan gate build Windows di bawah, atau gunakan [Actions Windows manual](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/workflows/windows.yml) dengan **Run workflow** setelah siap. Pilih commit kandidat dan unduh artifact hanya setelah run lulus. Jangan memakai paket versi lama untuk menyatakan kandidat baru lulus.
 
-Pilih `Portable\WFS-Network-Toolkit.exe` untuk menjalankan langsung atau `Installer\WFS-Network-Toolkit-1.2.0-x64-Setup.exe` untuk memasang. Shortcut ada di **WFS Project → WFS Network Toolkit** pada Start Menu. Tidak perlu WebView2.
+## Kandidat 1.3.0-rc.1 — Alert persisten
+
+Ledger alert per profil exporter, site/VRF, IP dan domain; ACK tersimpan di SQLite lintas sesi. Arsip global tidak menuduh satu exporter. Monitor terpisah, retensi, backup, filter, dan indikator kegagalan. **Schema 4 baru**: backup sebelum upgrade; schema 3 asli belum didukung. Baca [panduan ledger](docs/ALERT_LEDGER.md) dan [laporan uji](docs/TEST_REPORT.md). Kandidat source belum lulus gate Rust/Windows; paket baru belum tersedia. Jangan gunakan link paket lama sebagai build kandidat.
 
 ## Perbaikan 1.2.1 — Mode Admin dan diagnosis arsip
 
@@ -104,4 +106,4 @@ Smoke test memeriksa kontrol, navigasi halaman, footer, pilihan restore, kalkula
 
 ## Pengembangan berikutnya
 
-Lanjutkan dengan [Next Prompt v1.3](docs/NEXT_PROMPT_V13.md) untuk alert per exporter, penyempurnaan histori dan topologi, flow provenance, serta penerimaan Windows dan RouterOS.
+Lanjutkan dengan [Next Prompt v1.4](docs/NEXT_PROMPT_V14.md).

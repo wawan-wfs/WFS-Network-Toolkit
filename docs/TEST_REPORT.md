@@ -1,3 +1,19 @@
+# WFS Network Toolkit 1.3.0-rc.1 — kandidat pemulihan
+
+Baseline d468d19861a82e77d0786e8d3caaaf809931da1b. Source v1.3 lama tidak ditemukan; hasil ini rekonstruksi parsial.
+
+| Gate | Hasil |
+|---|---|
+| PASS — kontrak SQLite offline | python scripts/test_alert_schema.py: 3 tes lulus (migrasi 1→4 dan 2→4, application_id, scope/sesi, ack idempotent, replay, backup, reopen, retensi, rollback). Python SQLite, bukan crate Rust. |
+| PARTIAL — source | Monitor alert per scope dan ledger, handoff admin, pengaman queue, GUI native terhubung pada source; belum verifikasi executable. |
+| BLOCKED — Rust/Windows | cargo/rustc/rustfmt tidak tersedia di lingkungan; GitHub Actions tetap manual dan tidak dijalankan. Tidak ada installer baru. |
+| BLOCKED — schema 3 asli | Definisi arsip lama belum tersedia, sengaja ditolak. |
+| BLOCKED — benchmark, VM/hardware | Benchmark satu juta record belum diulang. UAC interaktif, DPI, RouterOS, Realtek belum diuji. |
+
+Rangkaian Rust test baru belum dijalankan. Tidak ada perubahan konfigurasi jaringan produksi. Source lama dan data pengguna tidak ditimpa.
+
+---
+
 # WFS Network Toolkit 1.2.1 — laporan uji
 
 ## Status verifikasi 1.2.1

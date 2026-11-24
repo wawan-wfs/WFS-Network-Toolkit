@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub mod alert_ledger;
 pub mod archive_ops;
 pub mod collector_alerts;
 pub mod device;

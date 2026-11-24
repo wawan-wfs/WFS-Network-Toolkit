@@ -1,4 +1,4 @@
-# Capability Matrix — 1.2.0
+# Capability Matrix — 1.3.0-rc.1 (kandidat source)
 
 | Area | Status | Batas bukti |
 | --- | --- | --- |
@@ -13,7 +13,7 @@
 | Topologi RouterOS dan IPAM observasi | Lulus fixture offline | Tabel relasi, tidak ada graf fisik. Tidak mengalokasikan IP. |
 | Polling RouterOS | Scheduler diuji dengan waktu sintetis | HTTPS GET, per target, satu pekerjaan aktif. Berhenti di antartahap I/O. Perangkat RouterOS fisik belum diuji. |
 | Tren interface dan histori lease | Fixture SQLite menguji migrasi, retensi, reopen dan backup | DHCPv4 dan counter interface. Rentang detik UTC. Tidak memprediksi riwayat sebelum observasi atau masa lease. |
-| Alert collector | Lulus fixture sesi | Kumulatif, bukan per exporter, tanpa persistensi ack. |
+| Alert collector | PARTIAL — kontrak SQL lulus; Rust belum diuji | Scoped ledger dan ack persisten, global writer errors; sequence gap/generasi exporter belum tersedia. |
 | Fitur lanjutan | Belum ada | Alias/catatan IPAM, histori waktu lokal, DHCPv6 binding, alert per exporter, SNMPv3/syslog, agen opt-in dan agregat persisten. |
 
 Baseline 0.6.0 ZIP SHA-256 `46d44bf76d64285e3a24abf09b2362e991b1d9cf517728e2f55d9a8b1afb9869`.
