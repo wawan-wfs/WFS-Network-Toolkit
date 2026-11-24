@@ -1,5 +1,6 @@
 const DRAW_ACTION: u32 = WM_APP + 1;
 const SYNC_LAYOUT: u32 = WM_APP + 2;
+const ADMIN_HANDOFF: u32 = WM_APP + 3;
 const PULSE: usize = 7;
 const FIRST: usize = 8;
 const ACTIVE: i32 = 100;
@@ -1386,6 +1387,9 @@ impl Native {
                 return Ok(());
             }
             ADMIN => {
+                if w::elevated() {
+                    return Ok(());
+                }
                 if self.intel.collector.is_some()
                     || !self.intel.schedule.jobs.is_empty()
                     || self.intel.poll_rx.is_some()
@@ -1397,7 +1401,7 @@ impl Native {
                 w::elevate_window()?;
                 // No background task can be active here; quit the message loop directly
                 // instead of a WM_CLOSE that may be suppressed by GWLP_USERDATA.
-                if unsafe { PostMessageW(self.hwnd, WM_APP + 3, 0, 0) } == 0 {
+                if unsafe { PostMessageW(self.hwnd, ADMIN_HANDOFF, 0, 0) } == 0 {
                     return Err("Gagal menutup jendela lama; periksa aplikasi yang sudah berjalan.".into());
                 }
                 return Ok(());
@@ -1897,7 +1901,7 @@ fn start_ui(smoke: bool) -> Result<()> {
             break;
         }
         match (m.hwnd == h, m.message, m.wParam) {
-            (true, msg, _) if msg == WM_APP + 3 => {
+            (true, ADMIN_HANDOFF, _) => {
                 unsafe { DestroyWindow(h); }
                 break;
             }

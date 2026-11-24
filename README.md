@@ -6,6 +6,10 @@ WFS Project · Windows 10/11 x64
 
 Belum tersedia executable dari kandidat ini. Jalankan gate build Windows di bawah, atau gunakan [Actions Windows manual](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/workflows/windows.yml) dengan **Run workflow** setelah siap. Pilih commit kandidat dan unduh artifact hanya setelah run lulus. Jangan memakai paket versi lama untuk menyatakan kandidat baru lulus.
 
+## Batch v1.4 — gate stabilisasi (source 1.3.0-rc.1)
+
+Sembilan tes kontrak SQL offline lulus. Query SQL digunakan bersama oleh source Rust dan suite Python. Filter alert mendukung `state=open/ack/recovered/all` ditambah teks scope, identitas ACK lebih ketat, dan replay tidak mengubah record yang sudah pulih. Final sample setelah writer berhenti ditambahkan pada source; belum diverifikasi dengan Rust/Windows. Workflow hanya manual. Baca [status gate](docs/V14_GATE_STATUS.md). Fitur besar P1 menunggu kompilasi/regresi.
+
 ## Kandidat 1.3.0-rc.1 — Alert persisten
 
 Ledger alert per profil exporter, site/VRF, IP dan domain; ACK tersimpan di SQLite lintas sesi. Arsip global tidak menuduh satu exporter. Monitor terpisah, retensi, backup, filter, dan indikator kegagalan. **Schema 4 baru**: backup sebelum upgrade; schema 3 asli belum didukung. Baca [panduan ledger](docs/ALERT_LEDGER.md) dan [laporan uji](docs/TEST_REPORT.md). Kandidat source belum lulus gate Rust/Windows; paket baru belum tersedia. Jangan gunakan link paket lama sebagai build kandidat.
@@ -106,4 +110,4 @@ Smoke test memeriksa kontrol, navigasi halaman, footer, pilihan restore, kalkula
 
 ## Pengembangan berikutnya
 
-Lanjutkan dengan [Next Prompt v1.4](docs/NEXT_PROMPT_V14.md).
+Lanjutkan dengan [Next Prompt gate-first](docs/NEXT_PROMPT_V15_GATE_FIRST.md).

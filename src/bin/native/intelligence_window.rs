@@ -878,7 +878,7 @@ impl Native {
                 STORAGE_MODE => "30 7 256  |  flow UTC-awal UTC-akhir",
                 POLL_MODE => "Interval detik (default 120)",
                 TREND_MODE | LEASE_MODE => "Filter sesi atau dua detik UTC untuk Arsip",
-                ALERT_MODE => "Site, VRF, sinyal atau status",
+                ALERT_MODE => "state=open/ack/recovered + site/VRF",
                 _ => "Cari IP, port, PID…",
             })
             .as_ptr() as isize,
@@ -1137,6 +1137,8 @@ impl Native {
                     self.load_archive(Query::default(), None)?;
                 } else if mode == STORAGE_MODE {
                     self.load_storage()?;
+                } else if mode == ALERT_MODE {
+                    self.load_alerts(self.intel.filter.clone())?;
                 } else {
                     self.render_intel();
                 }
@@ -2267,7 +2269,7 @@ impl Native {
                         ),
                     );
                 }
-                "Alert persisten tanpa popup. Cari memuat maksimal 1.000 terbaru (filter scope/status/sinyal). Pulih berarti observasi membaik; sesi lama tidak dinilai pulih otomatis."
+                "Alert persisten tanpa popup. Cari: state=open/ack/recovered ditambah teks scope. Maksimal 1.000 terbaru. Pulih berarti observasi membaik; sesi lama tidak dinilai pulih otomatis."
             }
             TOPOLOGY_MODE | IPAM_MODE | LEASE_MODE => {
                 let observations: Box<dyn Iterator<Item = &Observation>> =

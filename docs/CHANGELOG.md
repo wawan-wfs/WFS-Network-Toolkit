@@ -1,5 +1,12 @@
 # Catatan rilis WFS Network Toolkit
 
+## Batch v1.4 — stabilisasi kandidat (belum build)
+
+- Query alert berbagi berkas SQL dengan suite offline; filter state exact, perlindungan identitas/replay/ACK, retensi, cap, lock dan backup.
+- Pending writer mencakup transaksi aktif. Collector memisahkan stop receiver dan stop monitor agar final sample mengikuti drain writer. Observasi pendek saat penutupan normal tetap dicoba simpan.
+- Mode alert otomatis membaca arsip saat dipilih. Handoff Administrator memakai konstanta pesan dan guard jika sudah elevated.
+- Workflow hanya workflow_dispatch. Sembilan tes Python SQLite lulus; gate Rust/Windows belum dijalankan. Versi Cargo tidak dinaikkan.
+
 ## 1.3.0-rc.1 — kandidat pemulihan (belum build)
 
 - Rekonstruksi ledger alert per profil/site/VRF/IP/domain, penyimpanan schema 4 dan pengakuan persisten; schema 3 lama belum didukung.

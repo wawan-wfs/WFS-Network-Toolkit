@@ -543,6 +543,7 @@ pub struct Collector {
     archive_stats: Option<Arc<super::store::WriterStats>>,
     data: Arc<Mutex<Buffer>>,
     stop: Arc<AtomicBool>,
+    alert_stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
     alert_worker: Option<thread::JoinHandle<()>>,
 }
@@ -552,7 +553,11 @@ impl Drop for Collector {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        // The receiver owns Writer; join it first so the last committed or
+        // rejected batches are visible to the alert monitor's final sample.
+        self.alert_stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.alert_worker.take() {
+            worker.thread().unpark();
             let _ = worker.join();
         }
     }
@@ -577,13 +582,17 @@ fn monitor_alerts(
     loop {
         let now = Instant::now();
         let utc = super::now();
-        let snapshot = match state.lock() {
-            Ok(s) => s.profile_stats.clone(),
+        let final_sample = cancel.load(Ordering::Relaxed);
+        let (snapshot, listener_failed) = match state.lock() {
+            Ok(s) => (s.profile_stats.clone(), s.stats.error.is_some()),
             Err(_) => return,
         };
-        for (key, scope) in &scopes {
-            if let Some(stats) = snapshot.get(key) {
-                tracker.sample(scope, now, utc, stats, false);
+        // A failed listener cannot prove exporter silence or recovery.
+        if !listener_failed {
+            for (key, scope) in &scopes {
+                if let Some(stats) = snapshot.get(key) {
+                    tracker.sample(scope, now, utc, stats, false);
+                }
             }
         }
         if let Some(w) = counters {
@@ -596,9 +605,14 @@ fn monitor_alerts(
             };
             tracker.sample("Collector (semua exporter)", now, utc, &stats, true);
         }
+        if final_sample {
+            tracker.finish(utc);
+        }
         if !tracker.dirty.is_empty() {
             let rows: Vec<_> = tracker.dirty.values().cloned().collect();
-            let result = Archive::writer(path).and_then(|mut db| db.save_alerts(&rows));
+            // The flow writer has already opened/migrated the primary archive.
+            // Never create a new database on a monitor retry.
+            let result = Archive::alert_writer(path).and_then(|mut db| db.save_alerts(&rows));
             if let Ok(mut s) = state.lock() {
                 s.stats.alert_error = match result {
                     Ok(()) => {
@@ -609,10 +623,10 @@ fn monitor_alerts(
                 };
             }
         }
-        if cancel.load(Ordering::Relaxed) {
+        if final_sample {
             break;
         }
-        thread::sleep(Duration::from_secs(1));
+        thread::park_timeout(Duration::from_secs(1));
     }
 }
 
@@ -635,6 +649,7 @@ impl Collector {
         sock.set_read_timeout(Some(Duration::from_millis(300)))
             .map_err(|e| e.to_string())?;
         let stop = Arc::new(AtomicBool::new(false));
+        let alert_stop = Arc::new(AtomicBool::new(false));
         let data = Arc::new(Mutex::new(Buffer {
             profile_stats: allowed.keys().map(|key| (*key, Stats::default())).collect(),
             ..Default::default()
@@ -736,7 +751,7 @@ impl Collector {
             let path = path.to_path_buf();
             let profiles = config.profiles.clone();
             let state = data.clone();
-            let cancel = stop.clone();
+            let cancel = alert_stop.clone();
             let counters = archive_stats.clone();
             match thread::Builder::new().name("wfs-alert-ledger".into()).spawn(move || {
                 monitor_alerts(&path, &profiles, &state, &cancel, counters.as_deref());
@@ -756,6 +771,7 @@ impl Collector {
             archive_stats,
             data,
             stop,
+            alert_stop,
             worker: Some(worker),
             alert_worker,
         })

@@ -315,40 +315,76 @@ impl Archive {
         Ok(Self { conn })
     }
     pub fn save_alerts(&mut self, records: &[super::alert_ledger::Record]) -> Result<()> {
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
+        if records.len() > super::alert_ledger::MAX_ALERTS {
+            return Err("Batch alert terlalu besar.".into());
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(error)?;
         let policy = Self::read_policy(&tx)?;
         Self::set_quota(&tx, policy)?;
         let cutoff = sql_time(super::now().saturating_sub(policy.snapshot_days * 86400));
-        tx.execute("DELETE FROM collector_alerts WHERE last_seen < ?1", [cutoff]).map_err(error)?;
+        tx.execute(include_str!("sql/alert_prune.sql"), [cutoff])
+            .map_err(error)?;
         for r in records.iter().filter(|r| r.last_seen >= cutoff) {
-            tx.execute("INSERT INTO collector_alerts(session,serial,scope,signal,opened,last_seen,total,recovered)
-VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session,serial) DO UPDATE SET
-last_seen=max(collector_alerts.last_seen,excluded.last_seen),
-total=max(collector_alerts.total,excluded.total),
-recovered=coalesce(collector_alerts.recovered,excluded.recovered)",
-                params![r.session, r.serial, r.scope, r.signal, r.opened, r.last_seen, r.total, r.recovered]).map_err(error)?;
+            if r.serial <= 0
+                || r.total < 0
+                || r.opened < 0
+                || r.last_seen < r.opened
+                || r.recovered.is_some_and(|v| v < r.opened || v > r.last_seen)
+                || r.session.is_empty()
+                || r.session.len() > 256
+                || r.scope.is_empty()
+                || r.scope.len() > 2048
+                || r.signal.is_empty()
+                || r.signal.len() > 128
+            {
+                return Err("Record alert tidak valid; batch dibatalkan.".into());
+            }
+            let changed = tx
+                .execute(
+                    include_str!("sql/alert_upsert.sql"),
+                    params![
+                        r.session, r.serial, r.scope, r.signal,
+                        r.opened, r.last_seen, r.total, r.recovered
+                    ],
+                )
+                .map_err(error)?;
+            if changed != 1 {
+                return Err("Identitas alert bertabrakan; batch dibatalkan.".into());
+            }
         }
-        // Retain a bounded recent ledger, including unacknowledged incidents.
-        tx.execute("DELETE FROM collector_alerts WHERE id IN (SELECT id FROM collector_alerts ORDER BY last_seen DESC,id DESC LIMIT -1 OFFSET ?1)", [super::alert_ledger::MAX_ALERTS as i64]).map_err(error)?;
+        tx.execute(
+            include_str!("sql/alert_cap.sql"),
+            [super::alert_ledger::MAX_ALERTS as i64],
+        )
+        .map_err(error)?;
         tx.commit().map_err(error)
     }
 
     pub fn alert_page(&self, filter: &str) -> Result<Vec<super::alert_ledger::Record>> {
+        let (search, status) = super::alert_ledger::parse_filter(filter)?;
         if Self::verify(&self.conn, false)? < VERSION {
             return Ok(Vec::new());
         }
-        if filter.len() > 512 {
-            return Err("Filter alert terlalu panjang.".into());
-        }
-        let mut stmt = self.conn.prepare("SELECT id,session,serial,scope,signal,opened,last_seen,total,acknowledged,recovered FROM collector_alerts WHERE instr(lower(scope || ' ' || signal || ' ' || CASE WHEN recovered IS NOT NULL THEN 'Pulih teramati' WHEN acknowledged IS NOT NULL THEN 'Diakui' ELSE 'Belum diakui' END),lower(?1)) > 0 ORDER BY last_seen DESC,id DESC LIMIT ?2").map_err(error)?;
-        let rows = stmt.query_map(params![filter, super::alert_ledger::PAGE as i64], |r| {
-            Ok(super::alert_ledger::Record {
-                id: r.get(0)?, session: r.get(1)?, serial: r.get(2)?,
-                scope: r.get(3)?, signal: r.get(4)?, opened: r.get(5)?,
-                last_seen: r.get(6)?, total: r.get(7)?, acknowledged: r.get(8)?,
-                recovered: r.get(9)?,
+        let mut stmt = self.conn.prepare(include_str!("sql/alert_page.sql")).map_err(error)?;
+        let rows = stmt
+            .query_map(params![search, status, super::alert_ledger::PAGE as i64], |r| {
+                Ok(super::alert_ledger::Record {
+                    id: r.get(0)?,
+                    session: r.get(1)?,
+                    serial: r.get(2)?,
+                    scope: r.get(3)?,
+                    signal: r.get(4)?,
+                    opened: r.get(5)?,
+                    last_seen: r.get(6)?,
+                    total: r.get(7)?,
+                    acknowledged: r.get(8)?,
+                    recovered: r.get(9)?,
+                })
             })
-        }).map_err(error)?;
+            .map_err(error)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(error)
     }
 
@@ -365,8 +401,16 @@ recovered=coalesce(collector_alerts.recovered,excluded.recovered)",
     }
 
     pub fn acknowledge_alert(&self, record: &super::alert_ledger::Record, utc: u64) -> Result<()> {
-        let changed = self.conn.execute("UPDATE collector_alerts SET acknowledged=coalesce(acknowledged,max(opened,?1))
-WHERE id=?2 AND session=?3 AND serial=?4", params![sql_time(utc),record.id,record.session,record.serial]).map_err(error)?;
+        let changed = self
+            .conn
+            .execute(
+                include_str!("sql/alert_ack.sql"),
+                params![
+                    sql_time(utc), record.id, record.session, record.serial,
+                    record.scope, record.signal, record.opened
+                ],
+            )
+            .map_err(error)?;
         if changed != 1 {
             return Err("Alert sudah tidak tersedia. Muat ulang daftar.".into());
         }
@@ -715,7 +759,7 @@ WHERE id=?2 AND session=?3 AND serial=?4", params![sql_time(utc),record.id,recor
             )
             .map_err(error)?;
         let alerts = tx.execute(
-            "DELETE FROM collector_alerts WHERE last_seen < ?1",
+            include_str!("sql/alert_prune.sql"),
             [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
         ).map_err(error)?;
         tx.commit().map_err(error)?;
@@ -1143,9 +1187,7 @@ impl Writer {
                         for more in rx.try_iter().take(3) {
                             batch.extend(more);
                         }
-                        counters
-                            .pending_rows
-                            .fetch_sub(batch.len() as u64, Ordering::Relaxed);
+                        // Pending includes the transaction in flight until its result is known.
                         match db.insert(&batch) {
                             Ok(n) => {
                                 counters.written.fetch_add(n as u64, Ordering::Relaxed);
@@ -1160,6 +1202,9 @@ impl Writer {
                                 }
                             }
                         }
+                        counters
+                            .pending_rows
+                            .fetch_sub(batch.len() as u64, Ordering::Relaxed);
                     }
                 }
                 let _ = db.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");

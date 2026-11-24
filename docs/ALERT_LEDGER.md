@@ -8,3 +8,7 @@ Source asli rilis 1.3.0 lama tidak tersedia di repo pengganti. Implementasi ini 
 - Retensi memakai retensi snapshot dan batas 4.096 record terbaru. Kegagalan penyimpanan dapat membuat histori parsial; status error ditampilkan saat membaca alert. Monitor belum menjamin semua kejadian selama shutdown/crash atau saat DB penuh tersimpan. Tidak ada pemindaian atau tindakan jaringan otomatis.
 - **Schema 4 baru** dibedakan dari schema 3 rilis lama yang belum dapat diverifikasi. Schema 1/2 dapat dibaca dan dimigrasi secara transaksional ketika writer dibuka. Schema 3 ditolak sampai ada migrator yang diaudit. Simpan backup sebelum upgrade. Jangan menggunakan file schema 4 pada versi sebelumnya.
 - Gate Rust/Windows, benchmark UDP dan UAC belum lulus pada batch ini. Jalankan Python SQL contract, Rust tests, Clippy, build, smoke, serta uji VM dari panduan NEXT_PROMPT. Jangan menggunakan kandidat ini untuk jaringan produksi sebelum gate selesai.
+
+## Batch gate v1.4
+
+Gunakan `state=open`, `state=ack`, `state=recovered`, atau `state=all` diikuti teks scope. Kata status tepat Bahasa Indonesia juga tersedia. Query bersama diuji offline; Rust dan GUI belum diuji. Replay setelah pulih tidak mengubah histori, dan benturan identitas membatalkan batch. Penghentian normal mencoba final sample setelah writer drain. Kegagalan DB atau crash belum menjamin flush. Tidak ada migrasi schema baru.

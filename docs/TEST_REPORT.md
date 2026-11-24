@@ -1,3 +1,19 @@
+# Batch v1.4 — laporan gate aktual
+
+Baseline 22e97abcaee82f59feb46306c237b24d9b22d29c. Versi aplikasi tetap kandidat 1.3.0-rc.1.
+
+| Gate | Status |
+|---|---|
+| Kontrak SQL yang dipakai oleh Rust | PASS — 9/9 tes Python/SQLite, 0 gagal, 0.099 detik pada container Linux, Python 3.13.5, SQLite 3.46.1. |
+| Source Rust/GUI | PARTIAL — perubahan telah diintegrasikan tetapi belum dikompilasi. |
+| Kompilasi, Clippy, Rust test, format, smoke GUI, NSIS | BLOCKED — toolchain tidak tersedia dan dispatch manual tidak tersedia melalui konektor. |
+| Paket Windows, benchmark UDP, UAC, DPI, perangkat fisik | BLOCKED — tidak ada hasil baru. |
+| Fitur P1 | NOT STARTED — menunggu gate P0, sesuai urutan permintaan. |
+
+Rincian dan langkah manual: [V14_GATE_STATUS.md](V14_GATE_STATUS.md). Hasil di bawah merupakan riwayat, bukan verifikasi commit batch ini.
+
+---
+
 # WFS Network Toolkit 1.3.0-rc.1 — kandidat pemulihan
 
 Baseline d468d19861a82e77d0786e8d3caaaf809931da1b. Source v1.3 lama tidak ditemukan; hasil ini rekonstruksi parsial.

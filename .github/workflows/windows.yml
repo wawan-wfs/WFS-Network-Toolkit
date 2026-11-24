@@ -1,8 +1,6 @@
 name: Windows build and unit tests
 on:
   workflow_dispatch:
-  pull_request:
-    types: [opened, reopened]
 permissions:
   contents: read
 jobs:
@@ -10,6 +8,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test exact SQLite contract (offline fixtures)
+        run: python scripts/test_alert_schema.py
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - run: cargo +stable fmt --check
       - run: rustfmt +stable --edition 2024 --check src/bin/native/toolkit_window.rs
