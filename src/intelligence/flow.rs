@@ -586,16 +586,27 @@ fn monitor_alerts(
     cancel: &AtomicBool,
     counters: Option<&super::store::WriterStats>,
 ) {
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
     use super::{alert_ledger::Tracker, store::Archive};
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let mut tracker = Tracker::new(format!("{}-{nonce}", std::process::id()));
-    let scopes: Vec<_> = profiles.iter().map(|p| {
-        let scope = serde_json::to_string(&(
-            &p.config.site, &p.vrf, &p.id, p.config.exporter, p.config.observation_domain,
-        )).expect("profile scope can be encoded");
-        ((p.config.exporter, p.config.observation_domain), scope)
-    }).collect();
+    let scopes: Vec<_> = profiles
+        .iter()
+        .map(|p| {
+            let scope = serde_json::to_string(&(
+                &p.config.site,
+                &p.vrf,
+                &p.id,
+                p.config.exporter,
+                p.config.observation_domain,
+            ))
+            .expect("profile scope can be encoded");
+            ((p.config.exporter, p.config.observation_domain), scope)
+        })
+        .collect();
     loop {
         let now = Instant::now();
         let utc = super::now();
@@ -634,7 +645,9 @@ fn monitor_alerts(
                 s.stats.alert_error = match result {
                     Ok(()) => {
                         tracker.dirty.clear();
-                        tracker.overflow.then(|| "Antrean alert pernah penuh; histori parsial.".into())
+                        tracker
+                            .overflow
+                            .then(|| "Antrean alert pernah penuh; histori parsial.".into())
                     }
                     Err(e) => Some(format!("Alert belum tersimpan: {e}")),
                 };
@@ -665,9 +678,9 @@ impl Collector {
                 || p.id.is_empty()
                 || p.id.len() > 256
                 || super::label(&p.id) != p.id
-                || p.vrf.as_ref().is_some_and(|v| {
-                    v.trim().is_empty() || v.len() > 80 || super::label(v) != *v
-                })
+                || p.vrf
+                    .as_ref()
+                    .is_some_and(|v| v.trim().is_empty() || v.len() > 80 || super::label(v) != *v)
                 || !ids.insert(&p.id)
                 || allowed
                     .insert(
@@ -676,7 +689,9 @@ impl Collector {
                     )
                     .is_some()
             {
-                return Err("Profil tidak valid, bind berbeda, atau identitas exporter ganda.".into());
+                return Err(
+                    "Profil tidak valid, bind berbeda, atau identitas exporter ganda.".into(),
+                );
             }
         }
         let sock = UdpSocket::bind(config.bind)
@@ -790,9 +805,11 @@ impl Collector {
             let state = data.clone();
             let cancel = alert_stop.clone();
             let counters = archive_stats.clone();
-            match thread::Builder::new().name("wfs-alert-ledger".into()).spawn(move || {
-                monitor_alerts(&path, &profiles, &state, &cancel, counters.as_deref());
-            }) {
+            match thread::Builder::new()
+                .name("wfs-alert-ledger".into())
+                .spawn(move || {
+                    monitor_alerts(&path, &profiles, &state, &cancel, counters.as_deref());
+                }) {
                 Ok(handle) => Some(handle),
                 Err(e) => {
                     stop.store(true, Ordering::Relaxed);
@@ -818,14 +835,27 @@ impl Collector {
     }
 
     pub fn source_stats(&self) -> Vec<(String, Stats)> {
-        let Ok(b) = self.data.lock() else { return Vec::new() };
-        self.config.profiles.iter().filter_map(|p| {
-            let stats = b.profile_stats.get(&(p.config.exporter, p.config.observation_domain))?;
-            let label = format!("{} / {} / {} / {} #{}", p.config.site,
-                p.vrf.as_deref().unwrap_or("VRF tidak diketahui"),
-                p.id, p.config.exporter, p.config.observation_domain);
-            Some((label, stats.clone()))
-        }).collect()
+        let Ok(b) = self.data.lock() else {
+            return Vec::new();
+        };
+        self.config
+            .profiles
+            .iter()
+            .filter_map(|p| {
+                let stats = b
+                    .profile_stats
+                    .get(&(p.config.exporter, p.config.observation_domain))?;
+                let label = format!(
+                    "{} / {} / {} / {} #{}",
+                    p.config.site,
+                    p.vrf.as_deref().unwrap_or("VRF tidak diketahui"),
+                    p.id,
+                    p.config.exporter,
+                    p.config.observation_domain
+                );
+                Some((label, stats.clone()))
+            })
+            .collect()
     }
     pub fn snapshot(&self) -> (Stats, Vec<Flow>) {
         self.read_buffer(true)

@@ -1,3 +1,15 @@
+# WeNet Toolkit — pemeriksaan CI manual 45426915628
+
+Baseline: d511189e7ef8e0ed169caa8c9e989a8d10d260f4. Run 45426915628 (workflow_dispatch), job 138561312745, artifact 14936888586. SHA256 ZIP: ec7c81a038b5a0bcc94b63b1b0f7e39c2beae60274ff9be347e49a5006b5664a. Semua 11 file artefak dibaca; hash cocok.
+
+Windows Server 2025, Rust 1.100.0. PASS 7/10 gate: branding 4/4, SQLite 9/9, runner 5/5, rust version, Clippy, Rust unit tests 70 passed/0 failed/2 ignored, release build (81.641 s). FAIL: cargo fmt, rustfmt toolkit, rustfmt intelligence. CLI smoke, GUI smoke, NSIS dan upload paket dilewati. Tidak ada kesalahan compiler/Clippy/unit test pada run ini.
+
+Perubahan: koreksi format pada tujuh source berdasarkan diff aktual dari tiga log format. Tidak ada perubahan fitur, versi, schema, workflow trigger, atau lockfile. Semua koreksi dicocokkan dengan source baseline; penerapan format tidak sama dengan menjalankan ulang rustfmt. Gate belum diverifikasi pada commit hasil koreksi. Run manual baru wajib. P1 menunggu seluruh gate lulus, termasuk GUI smoke dan installer. Tidak ada installer baru.
+
+[Run asli](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45426915628) · [Artefak asli](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45426915628/artifacts/14936888586)
+
+---
+
 # WeNet Toolkit — latest gate recovery report
 
 Baseline 107135e2674a857df91b5ad71aac7ad272401d47.

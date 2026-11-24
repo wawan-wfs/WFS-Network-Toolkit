@@ -297,7 +297,8 @@ impl Archive {
                 .map_err(error)?;
         }
         if current < VERSION {
-            tx.execute_batch(include_str!("sql/004.sql")).map_err(error)?;
+            tx.execute_batch(include_str!("sql/004.sql"))
+                .map_err(error)?;
         }
         tx.commit().map_err(error)?;
         let archive = Self { conn };
@@ -346,8 +347,14 @@ impl Archive {
                 .execute(
                     include_str!("sql/alert_upsert.sql"),
                     params![
-                        r.session, r.serial, r.scope, r.signal,
-                        r.opened, r.last_seen, r.total, r.recovered
+                        r.session,
+                        r.serial,
+                        r.scope,
+                        r.signal,
+                        r.opened,
+                        r.last_seen,
+                        r.total,
+                        r.recovered
                     ],
                 )
                 .map_err(error)?;
@@ -368,34 +375,46 @@ impl Archive {
         if Self::verify(&self.conn, false)? < VERSION {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(include_str!("sql/alert_page.sql")).map_err(error)?;
-        let rows = stmt
-            .query_map(params![search, status, super::alert_ledger::PAGE as i64], |r| {
-                Ok(super::alert_ledger::Record {
-                    id: r.get(0)?,
-                    session: r.get(1)?,
-                    serial: r.get(2)?,
-                    scope: r.get(3)?,
-                    signal: r.get(4)?,
-                    opened: r.get(5)?,
-                    last_seen: r.get(6)?,
-                    total: r.get(7)?,
-                    acknowledged: r.get(8)?,
-                    recovered: r.get(9)?,
-                })
-            })
+        let mut stmt = self
+            .conn
+            .prepare(include_str!("sql/alert_page.sql"))
             .map_err(error)?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(error)
+        let rows = stmt
+            .query_map(
+                params![search, status, super::alert_ledger::PAGE as i64],
+                |r| {
+                    Ok(super::alert_ledger::Record {
+                        id: r.get(0)?,
+                        session: r.get(1)?,
+                        serial: r.get(2)?,
+                        scope: r.get(3)?,
+                        signal: r.get(4)?,
+                        opened: r.get(5)?,
+                        last_seen: r.get(6)?,
+                        total: r.get(7)?,
+                        acknowledged: r.get(8)?,
+                        recovered: r.get(9)?,
+                    })
+                },
+            )
+            .map_err(error)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(error)
     }
 
     // Open an existing archive without creating or migrating it on an ACK action.
     pub fn alert_writer(path: &Path) -> Result<Self> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(error)?;
+        conn.busy_timeout(Duration::from_millis(1500))
             .map_err(error)?;
-        conn.busy_timeout(Duration::from_millis(1500)).map_err(error)?;
-        conn.execute_batch("PRAGMA trusted_schema=OFF;").map_err(error)?;
+        conn.execute_batch("PRAGMA trusted_schema=OFF;")
+            .map_err(error)?;
         if Self::verify(&conn, false)? != VERSION {
-            return Err("Arsip perlu dimigrasikan melalui operasi penyimpanan sebelum mengakui alert.".into());
+            return Err(
+                "Arsip perlu dimigrasikan melalui operasi penyimpanan sebelum mengakui alert."
+                    .into(),
+            );
         }
         Ok(Self { conn })
     }
@@ -406,8 +425,13 @@ impl Archive {
             .execute(
                 include_str!("sql/alert_ack.sql"),
                 params![
-                    sql_time(utc), record.id, record.session, record.serial,
-                    record.scope, record.signal, record.opened
+                    sql_time(utc),
+                    record.id,
+                    record.session,
+                    record.serial,
+                    record.scope,
+                    record.signal,
+                    record.opened
                 ],
             )
             .map_err(error)?;
@@ -758,10 +782,12 @@ impl Archive {
                 [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
             )
             .map_err(error)?;
-        let alerts = tx.execute(
-            include_str!("sql/alert_prune.sql"),
-            [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
-        ).map_err(error)?;
+        let alerts = tx
+            .execute(
+                include_str!("sql/alert_prune.sql"),
+                [sql_time(now.saturating_sub(policy.snapshot_days * 86400))],
+            )
+            .map_err(error)?;
         tx.commit().map_err(error)?;
         Ok(flows + snapshots + router_samples + alerts)
     }
@@ -890,7 +916,11 @@ impl Archive {
                 .map_err(error)?;
         }
         if Self::verify(&self.conn, false)? == VERSION {
-            self.conn.query_row("SELECT count(*) FROM collector_alerts", [], |r| r.get::<_, i64>(0)).map_err(error)?;
+            self.conn
+                .query_row("SELECT count(*) FROM collector_alerts", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .map_err(error)?;
         }
 
         Ok(())
@@ -1230,11 +1260,15 @@ impl Writer {
             match tx.try_send(batch) {
                 Ok(()) => {}
                 Err(TrySendError::Full(v)) => {
-                    self.stats.pending_rows.fetch_sub(v.len() as u64, Ordering::Relaxed);
+                    self.stats
+                        .pending_rows
+                        .fetch_sub(v.len() as u64, Ordering::Relaxed);
                     self.stats.note_drop(DropCause::QueueFull, v.len());
                 }
                 Err(TrySendError::Disconnected(v)) => {
-                    self.stats.pending_rows.fetch_sub(v.len() as u64, Ordering::Relaxed);
+                    self.stats
+                        .pending_rows
+                        .fetch_sub(v.len() as u64, Ordering::Relaxed);
                     self.stats.note_drop(DropCause::WriterClosed, v.len());
                 }
             }
@@ -1248,7 +1282,9 @@ impl Drop for Writer {
             && h.join().is_err()
             && let Ok(mut error) = self.stats.error.lock()
         {
-            *error = Some("Writer arsip berhenti tidak normal; record tertunda belum terverifikasi.".into());
+            *error = Some(
+                "Writer arsip berhenti tidak normal; record tertunda belum terverifikasi.".into(),
+            );
         }
     }
 }
@@ -1438,7 +1474,13 @@ mod tests {
         old.execute_batch(include_str!("sql/001.sql")).unwrap();
         old.execute_batch(include_str!("sql/002.sql")).unwrap();
         drop(old);
-        assert!(Archive::reader(&path).unwrap().alert_page("").unwrap().is_empty());
+        assert!(
+            Archive::reader(&path)
+                .unwrap()
+                .alert_page("")
+                .unwrap()
+                .is_empty()
+        );
         assert!(Archive::alert_writer(&path).is_err());
         let mut db = Archive::writer(&path).unwrap();
         assert_eq!(Archive::verify(&db.conn, false).unwrap(), VERSION);
@@ -1493,7 +1535,9 @@ mod tests {
         assert!(Archive::reader(&path).is_err());
         assert!(Archive::writer(&path).is_err());
         let raw = Connection::open(&path).unwrap();
-        let version: i64 = raw.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        let version: i64 = raw
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
         assert_eq!(version, 3);
         drop(raw);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

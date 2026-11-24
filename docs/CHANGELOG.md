@@ -1,3 +1,11 @@
+# Koreksi gate berdasarkan CI Windows manual
+
+- Terapkan diff rustfmt dari run 45426915628 pada 7 source files; tidak ada perubahan perilaku yang disengaja.
+- Baseline Windows: Clippy, 70 tes Rust dan release build lulus, 3 format gagal. Ulangi manual untuk memastikan koreksi, smoke GUI dan paket.
+- Versi kandidat tetap 1.3.0-rc.1, Actions manual-only; P1 belum diimplementasikan.
+
+---
+
 # WeNet Toolkit — gate recovery candidate
 
 - Added independent fail-closed gate runner, JSON and per-command logs uploaded even on CI failure; retains existing native smoke and packaging gate. Manual trigger only.

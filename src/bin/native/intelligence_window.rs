@@ -1,7 +1,7 @@
 use wfs_network_toolkit::intelligence::{
     self as ni, Assessment, Coverage, EndpointState, LocalSnapshot, Probe, TrafficImport,
-    archive_ops::{DeletePreview, Kind, Policy, RecoveryPlan, check_recovery_destination},
     alert_ledger::Record as AlertRecord,
+    archive_ops::{DeletePreview, Kind, Policy, RecoveryPlan, check_recovery_destination},
     device::{Inspection, ObservedScope},
     flow::{self, Collector, CollectorConfig},
     history,
@@ -954,12 +954,19 @@ impl Native {
                 self.intel.alert_path = None;
                 let summary = format!(
                     "Collector dihentikan. Arsip ditulis {} · duplikat {} · drop {} · tertunda {}.",
-                    stats.archived, stats.archive_duplicate, stats.archive_dropped, stats.archive_pending
+                    stats.archived,
+                    stats.archive_duplicate,
+                    stats.archive_dropped,
+                    stats.archive_pending
                 );
-                let errors = [stats.error.as_deref(), stats.archive_error.as_deref(), stats.alert_error.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>();
+                let errors = [
+                    stats.error.as_deref(),
+                    stats.archive_error.as_deref(),
+                    stats.alert_error.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
                 if !errors.is_empty() || stats.archive_dropped != 0 || stats.archive_pending != 0 {
                     notice = Some(Notice::Warning(format!(
                         "{summary}\nHistori mungkin parsial.\n{}",
@@ -1386,9 +1393,7 @@ impl Native {
             }
             INTEL_STOP => {
                 if let Some(collector) = self.intel.collector.take() {
-                    self.start_intel(move || {
-                        Ok(IntelReply::Stopped(Box::new(collector.stop())))
-                    })?;
+                    self.start_intel(move || Ok(IntelReply::Stopped(Box::new(collector.stop()))))?;
                 }
             }
             INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
@@ -1426,8 +1431,15 @@ impl Native {
                 if self.intel.alert_path.as_ref() != Some(&path) {
                     return Err("Muat ulang alert dari arsip utama.".into());
                 }
-                let row = self.selected_intel_row().ok_or("Pilih alert yang ingin diakui.")?;
-                let record = self.intel.alert_rows.get(row).cloned().ok_or("Alert tidak tersedia.")?;
+                let row = self
+                    .selected_intel_row()
+                    .ok_or("Pilih alert yang ingin diakui.")?;
+                let record = self
+                    .intel
+                    .alert_rows
+                    .get(row)
+                    .cloned()
+                    .ok_or("Alert tidak tersedia.")?;
                 let filter = self.intel.filter.clone();
                 self.start_intel(move || {
                     let db = Archive::alert_writer(&path)?;
@@ -2074,12 +2086,21 @@ impl Native {
                                         } else {
                                             "Pernah teramati".into()
                                         },
-                                        format!("{} datagram · {} template hilang", source.accepted_datagrams, source.missing_templates),
+                                        format!(
+                                            "{} datagram · {} template hilang",
+                                            source.accepted_datagrams, source.missing_templates
+                                        ),
                                     ],
-                                    &|| format!(
-                                        "{scope}\nDiterima {} · parser ditolak {} · duplikat {} · template hilang {}\nTerakhir UTC {}. Tidak ada datagram bukan bukti router putus. Drop arsip global tidak diatribusikan ke profil ini.",
-                                        source.accepted_datagrams, source.invalid, source.duplicate, source.missing_templates, display_opt(source.last_received)
-                                    ),
+                                    &|| {
+                                        format!(
+                                            "{scope}\nDiterima {} · parser ditolak {} · duplikat {} · template hilang {}\nTerakhir UTC {}. Tidak ada datagram bukan bukti router putus. Drop arsip global tidak diatribusikan ke profil ini.",
+                                            source.accepted_datagrams,
+                                            source.invalid,
+                                            source.duplicate,
+                                            source.missing_templates,
+                                            display_opt(source.last_received)
+                                        )
+                                    },
                                 );
                             }
                         }
@@ -2281,10 +2302,21 @@ impl Native {
                             status.into(),
                             format!("UTC {} · {}", event.last_seen, event.total),
                         ],
-                        &|| format!(
-                            "{}\nCakupan (site/VRF/profil/IP/domain): {}\nSesi {} · #{}\nDibuka UTC {} · terakhir UTC {} · total {}\nDiakui {:?} · pulih {:?}\nStatus: {}. Tidak membuktikan router putus. Tidak memicu perubahan jaringan.",
-                            event.signal,event.scope,event.session,event.serial,event.opened,event.last_seen,event.total,event.acknowledged,event.recovered,status
-                        ),
+                        &|| {
+                            format!(
+                                "{}\nCakupan (site/VRF/profil/IP/domain): {}\nSesi {} · #{}\nDibuka UTC {} · terakhir UTC {} · total {}\nDiakui {:?} · pulih {:?}\nStatus: {}. Tidak membuktikan router putus. Tidak memicu perubahan jaringan.",
+                                event.signal,
+                                event.scope,
+                                event.session,
+                                event.serial,
+                                event.opened,
+                                event.last_seen,
+                                event.total,
+                                event.acknowledged,
+                                event.recovered,
+                                status
+                            )
+                        },
                     );
                 }
                 "Alert persisten tanpa popup. Cari: state=open/ack/recovered ditambah teks scope. Maksimal 1.000 terbaru. Pulih berarti observasi membaik; sesi lama tidak dinilai pulih otomatis."
@@ -2721,7 +2753,10 @@ impl Native {
                         v.samples
                     )),
                 if mode == ALERT_MODE {
-                    self.intel.collector.as_ref().and_then(|c| c.stats().alert_error)
+                    self.intel
+                        .collector
+                        .as_ref()
+                        .and_then(|c| c.stats().alert_error)
                         .map_or(String::new(), |e| format!(" · {e}"))
                 } else {
                     String::new()

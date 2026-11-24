@@ -55,11 +55,7 @@ fn run() -> wfs_network_toolkit::Result<()> {
             println!(
                 "Profil valid · sumber: {} · format: {}",
                 profile.source_name,
-                if legacy {
-                    "IPv4 lama"
-                } else {
-                    "WeNet Toolkit"
-                }
+                if legacy { "IPv4 lama" } else { "WeNet Toolkit" }
             );
             println!(
                 "IPv4/DNS: {}",

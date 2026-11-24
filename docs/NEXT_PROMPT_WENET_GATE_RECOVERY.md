@@ -1,3 +1,9 @@
+# Checkpoint terbaru — setelah koreksi format dari run 45426915628
+
+Gunakan HEAD main terbaru, bukan SHA lama. Artefak 14936888586 telah diperiksa. Baseline d511189e lulus 70 tes Rust, Clippy dan release build, tetapi tiga pemeriksaan format gagal. Koreksi berdasarkan diff telah diterapkan. Jalankan workflow manual pada HEAD baru; periksa setiap log termasuk ketiga format, CLI smoke, GUI smoke, NSIS dan checksum. Tidak ada klaim gate hijau sebelum run baru selesai. Jika gate lulus, lanjutkan P1 besar dari spesifikasi lengkap berikut. Jika gagal, perbaiki error aktual tanpa menurunkan gate. Pertahankan versi hingga verifikasi. Jangan rerun commit lama sebagai bukti HEAD baru.
+
+---
+
 # WeNet Toolkit by WFS Project — next large development batch
 
 Read docs/GATE_RECOVERY.md, docs/NEXT_PROMPT_WENET.md, docs/V14_GATE_STATUS.md, docs/NEXT_PROMPT_V15_GATE_FIRST.md, docs/TEST_REPORT.md, docs/WENET_BRANDING.md. Resolve and verify actual main SHA. Candidate still 1.3.0-rc.1.

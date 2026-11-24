@@ -247,7 +247,13 @@ impl Native {
         )?;
         send_native(ui.h(BRAND_ICON), STM_SETICON_NATIVE, icon as usize, 0);
         ui.text("WeNet Toolkit", BRAND, None, 1, [60, 22, 137, 27])?;
-        ui.text("Network intelligence", BRAND_TAGLINE, None, 3, [60, 51, 137, 19])?;
+        ui.text(
+            "Network intelligence",
+            BRAND_TAGLINE,
+            None,
+            3,
+            [60, 51, 137, 19],
+        )?;
         for (i, page) in PAGES.into_iter().enumerate() {
             ui.button(
                 page.name(),
@@ -976,7 +982,9 @@ impl Native {
                     normal && self.intel.recovery_view.is_none() && self.intel.collector.is_none()
                 }
                 INTEL_RECORD if selection(self.h(INTEL_MODE)) == ALERT_MODE => {
-                    normal && self.intel.recovery_view.is_none() && !self.intel.alert_rows.is_empty()
+                    normal
+                        && self.intel.recovery_view.is_none()
+                        && !self.intel.alert_rows.is_empty()
                 }
                 INTEL_RECORD
                     if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) =>
@@ -1404,7 +1412,9 @@ impl Native {
                 // No background task can be active here; quit the message loop directly
                 // instead of a WM_CLOSE that may be suppressed by GWLP_USERDATA.
                 if unsafe { PostMessageW(self.hwnd, ADMIN_HANDOFF, 0, 0) } == 0 {
-                    return Err("Gagal menutup jendela lama; periksa aplikasi yang sudah berjalan.".into());
+                    return Err(
+                        "Gagal menutup jendela lama; periksa aplikasi yang sudah berjalan.".into(),
+                    );
                 }
                 return Ok(());
             }
@@ -1754,7 +1764,14 @@ unsafe extern "system" fn wnd(h: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             };
             let fg = if matches!(
                 id,
-                INTRO | BRAND_TAGLINE | COPYRIGHT | FOOTER | IP_NOTE | RECOVER_NOTE | NOTICE | REVIEW_NOTE
+                INTRO
+                    | BRAND_TAGLINE
+                    | COPYRIGHT
+                    | FOOTER
+                    | IP_NOTE
+                    | RECOVER_NOTE
+                    | NOTICE
+                    | REVIEW_NOTE
             ) {
                 muted()
             } else if id == LINK_STATE {
@@ -1913,7 +1930,9 @@ fn start_ui(smoke: bool) -> Result<()> {
         }
         match (m.hwnd == h, m.message, m.wParam) {
             (true, ADMIN_HANDOFF, _) => {
-                unsafe { DestroyWindow(h); }
+                unsafe {
+                    DestroyWindow(h);
+                }
                 break;
             }
             (true, SYNC_LAYOUT, _) => ui.layout(),
@@ -2353,7 +2372,10 @@ pub fn run() {
         && flag == "--wait-for-parent"
     {
         if !w::elevated() {
-            show_launch_error("Mode Admin harus dijalankan dengan izin Administrator.", false);
+            show_launch_error(
+                "Mode Admin harus dijalankan dengan izin Administrator.",
+                false,
+            );
             std::process::exit(1);
         }
         if let Err(e) = w::wait_for_parent(parent) {

@@ -147,8 +147,8 @@ impl Tracker {
             pending = Some(event.clone());
             slot.event = Some(event);
         }
-        let recovered = clear && !changed
-            && now.saturating_duration_since(slot.last_problem) >= DEBOUNCE;
+        let recovered =
+            clear && !changed && now.saturating_duration_since(slot.last_problem) >= DEBOUNCE;
         if let Some(event) = slot.event.as_mut()
             && (changed || recovered)
         {
@@ -222,22 +222,62 @@ impl Tracker {
         if global {
             let written = stats.archived > previous.archived;
             for (name, value, old) in [
-                ("Antrean arsip penuh", stats.archive_queue_full, previous.archive_queue_full),
-                ("Writer tertutup", stats.archive_writer_closed, previous.archive_writer_closed),
-                ("Gagal tulis SQLite", stats.archive_sqlite_failed, previous.archive_sqlite_failed),
+                (
+                    "Antrean arsip penuh",
+                    stats.archive_queue_full,
+                    previous.archive_queue_full,
+                ),
+                (
+                    "Writer tertutup",
+                    stats.archive_writer_closed,
+                    previous.archive_writer_closed,
+                ),
+                (
+                    "Gagal tulis SQLite",
+                    stats.archive_sqlite_failed,
+                    previous.archive_sqlite_failed,
+                ),
             ] {
-                self.mark(scope, name, now, utc, (value > old, written && value == old, value));
+                self.mark(
+                    scope,
+                    name,
+                    now,
+                    utc,
+                    (value > old, written && value == old, value),
+                );
             }
         } else {
             for (name, value, old) in [
-                ("Template hilang", stats.missing_templates, previous.missing_templates),
+                (
+                    "Template hilang",
+                    stats.missing_templates,
+                    previous.missing_templates,
+                ),
                 ("Datagram ditolak parser", stats.invalid, previous.invalid),
                 ("Datagram duplikat", stats.duplicate, previous.duplicate),
             ] {
-                self.mark(scope, name, now, utc, (value > old, progress && value == old, value));
+                self.mark(
+                    scope,
+                    name,
+                    now,
+                    utc,
+                    (value > old, progress && value == old, value),
+                );
             }
-            self.mark(scope, "Belum ada datagram diterima", now, utc, (new_quiet && first, progress, 300));
-            self.mark(scope, "Jeda observasi", now, utc, (new_quiet && !first, progress, 300));
+            self.mark(
+                scope,
+                "Belum ada datagram diterima",
+                now,
+                utc,
+                (new_quiet && first, progress, 300),
+            );
+            self.mark(
+                scope,
+                "Jeda observasi",
+                now,
+                utc,
+                (new_quiet && !first, progress, 300),
+            );
         }
     }
 }
@@ -249,7 +289,10 @@ mod tests {
     fn filter_state_is_exact() {
         assert_eq!(parse_filter("Diakui").unwrap(), ("", "ack"));
         assert_eq!(parse_filter("Belum diakui").unwrap(), ("", "open"));
-        assert_eq!(parse_filter("state=recovered site/A").unwrap(), ("site/A", "recovered"));
+        assert_eq!(
+            parse_filter("state=recovered site/A").unwrap(),
+            ("site/A", "recovered")
+        );
         assert!(parse_filter("state=invalid").is_err());
         assert!(parse_filter(&"x".repeat(513)).is_err());
     }
@@ -290,6 +333,10 @@ mod tests {
         assert_eq!(t.dirty.values().next().unwrap().recovered, Some(107));
         t.sample("B", base + Duration::from_secs(300), 400, &b, false);
         t.sample("B", base + Duration::from_secs(305), 405, &b, false);
-        assert!(t.dirty.values().any(|r| r.scope == "B" && r.signal == "Belum ada datagram diterima"));
+        assert!(
+            t.dirty
+                .values()
+                .any(|r| r.scope == "B" && r.signal == "Belum ada datagram diterima")
+        );
     }
 }
