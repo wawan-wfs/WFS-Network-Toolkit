@@ -51,6 +51,7 @@ const CANCEL: i32 = 192;
 const NAV: i32 = 200;
 const STATIC_START: i32 = 300;
 const ADAPTER_LABEL: i32 = 111;
+const BRAND_TAGLINE: i32 = 112;
 const HOME_LABEL: i32 = 132;
 const REVIEW_TARGET: i32 = 193;
 const REVIEW_NOTE: i32 = 194;
@@ -99,7 +100,7 @@ impl Page {
             Self::Mac => "Ubah atau pulihkan MAC pada adaptor Ethernet fisik yang didukung.",
             Self::Backup => "Cadangkan, pindahkan, atau pulihkan konfigurasi adaptor yang dipilih.",
             Self::Diag => "Uji gateway, hitung subnet, dan ekspor laporan yang dapat disamarkan.",
-            Self::Intel => "Akses internet per IP, perangkat, layanan, dan snapshot MikroTik.",
+            Self::Intel => "Telusuri IP, layanan, trafik, histori, dan observasi MikroTik.",
             Self::Review => "Periksa adaptor serta nilai sebelum dan target sebelum melanjutkan.",
         }
     }
@@ -181,28 +182,28 @@ fn bg() -> u32 {
     color(255, 255, 255)
 }
 fn rail() -> u32 {
-    color(244, 246, 249)
+    color(241, 246, 249)
 }
 fn ink() -> u32 {
-    color(25, 34, 49)
+    color(16, 44, 70)
 }
 fn accent() -> u32 {
-    color(70, 47, 151)
+    color(0, 103, 107)
 }
 fn muted() -> u32 {
-    color(76, 88, 107)
+    color(65, 85, 102)
 }
 fn line() -> u32 {
-    color(206, 212, 222)
+    color(207, 220, 227)
 }
 fn selected_nav() -> u32 {
-    color(233, 229, 249)
+    color(219, 241, 239)
 }
 fn button_border() -> u32 {
-    color(129, 139, 155)
+    color(115, 137, 152)
 }
 fn pressed_primary() -> u32 {
-    color(54, 34, 124)
+    color(0, 79, 84)
 }
 fn fill(dc: HDC, r: &RECT, c: u32) {
     let brush = unsafe { CreateSolidBrush(c) };
@@ -245,7 +246,8 @@ impl Native {
             [20, 22, 32, 34],
         )?;
         send_native(ui.h(BRAND_ICON), STM_SETICON_NATIVE, icon as usize, 0);
-        ui.text("Network Toolkit", BRAND, None, 1, [60, 28, 137, 28])?;
+        ui.text("WeNet Toolkit", BRAND, None, 1, [60, 22, 137, 27])?;
+        ui.text("Network intelligence", BRAND_TAGLINE, None, 3, [60, 51, 137, 19])?;
         for (i, page) in PAGES.into_iter().enumerate() {
             ui.button(
                 page.name(),
@@ -255,7 +257,7 @@ impl Native {
             )?;
         }
         ui.text(&format!("Versi {VERSION}"), FOOTER, None, 3, VERSION_RECT)?;
-        ui.text("© WFS Project", COPYRIGHT, None, 3, COPYRIGHT_RECT)?;
+        ui.text("by WFS Project", COPYRIGHT, None, 3, COPYRIGHT_RECT)?;
         ui.text(Page::Home.name(), HEADING, None, 2, [228, 20, -256, 39])?;
         ui.text(Page::Home.caption(), INTRO, None, 0, [228, 63, -256, 29])?;
         ui.text(
@@ -890,7 +892,7 @@ impl Native {
         self.present_notice_with(notice, |hwnd, title, message, icon| {
             popup_titled(
                 hwnd,
-                &format!("{title} — WFS Network Toolkit"),
+                &format!("{title} — WeNet Toolkit"),
                 &crlf(message),
                 icon,
             );
@@ -1562,6 +1564,15 @@ fn draw_button(item: &DRAWITEMSTRUCT) {
             DeleteObject(brush);
         }
     }
+    if active && !disabled {
+        let indicator = RECT {
+            left: r.left + 3,
+            top: r.top + h / 5,
+            right: r.left + 6,
+            bottom: r.bottom - h / 5,
+        };
+        fill(item.hDC, &indicator, accent());
+    }
     let s = w::wide(&get(item.hwndItem));
     let mut r = item.rcItem;
     if nav {
@@ -1735,7 +1746,7 @@ unsafe extern "system" fn wnd(h: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             let id = unsafe { GetDlgCtrlID(lparam as HWND) };
             let tint = if matches!(
                 id,
-                BRAND_ICON | BRAND | COPYRIGHT | FOOTER | NOTICE | REVIEW_NOTE
+                BRAND_ICON | BRAND | BRAND_TAGLINE | COPYRIGHT | FOOTER | NOTICE | REVIEW_NOTE
             ) {
                 rail()
             } else {
@@ -1743,7 +1754,7 @@ unsafe extern "system" fn wnd(h: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             };
             let fg = if matches!(
                 id,
-                INTRO | COPYRIGHT | FOOTER | IP_NOTE | RECOVER_NOTE | NOTICE | REVIEW_NOTE
+                INTRO | BRAND_TAGLINE | COPYRIGHT | FOOTER | IP_NOTE | RECOVER_NOTE | NOTICE | REVIEW_NOTE
             ) {
                 muted()
             } else if id == LINK_STATE {
@@ -1834,7 +1845,7 @@ fn start_ui(smoke: bool) -> Result<()> {
     };
     let width = logical(1060).min(available_w).max(500);
     let height = logical(740).min(available_h).max(450);
-    let title = w::wide("WFS Network Toolkit");
+    let title = w::wide("WeNet Toolkit");
     let h = unsafe {
         CreateWindowExW(
             WS_EX_CONTROLPARENT,
@@ -1962,8 +1973,9 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     {
         return Err("Tampilan awal tidak berisi kontrol Windows".into());
     }
-    if get(ui.h(BRAND)) != "Network Toolkit"
-        || get(ui.h(COPYRIGHT)) != "© WFS Project"
+    if get(ui.h(BRAND)) != "WeNet Toolkit"
+        || get(ui.h(BRAND_TAGLINE)) != "Network intelligence"
+        || get(ui.h(COPYRIGHT)) != "by WFS Project"
         || ui.restore_scope() != RestoreScope::Network
     {
         return Err("Header, footer, atau pilihan restore awal tidak sesuai".into());
@@ -2327,7 +2339,7 @@ pub fn run() {
         let (title, icon) = notice.dialog().expect("helper result is a dialog");
         let shown = popup_titled(
             null_mut(),
-            &format!("{title} — WFS Network Toolkit"),
+            &format!("{title} — WeNet Toolkit"),
             &crlf(notice.text()),
             icon | MB_SETFOREGROUND,
         );

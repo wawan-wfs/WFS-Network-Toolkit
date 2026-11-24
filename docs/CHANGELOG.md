@@ -1,3 +1,14 @@
+# WeNet Toolkit — changelog
+
+## Rebranding kandidat (versi Cargo tetap 1.3.0-rc.1)
+
+- Nama produk WeNet Toolkit, credit by WFS Project. Ikon W jaringan navy/mint tujuh ukuran ICO, SVG, PNG; palet Win32 light navy/teal, indikator navigasi, tagline.
+- EXE GUI, resource, shortcut, daftar aplikasi, dokumentasi, laporan diagnostik dan nama paket diselaraskan. CLI, folder arsip, mutex, crate dan identitas installer tetap.
+- Pembersihan shortcut lama saat upgrade; EXE lama dicoba hapus setelah file baru terpasang. Tidak ada perubahan schema atau konfigurasi jaringan.
+- Tes statis konsistensi branding ditambahkan ke workflow manual. Build Rust, UI Windows, installer upgrade dan benchmark belum lulus.
+
+---
+
 # Catatan rilis WFS Network Toolkit
 
 ## Batch v1.4 — stabilisasi kandidat (belum build)

@@ -1,6 +1,10 @@
-# WFS Network Toolkit 1.3.0-rc.1 (kandidat pemulihan)
+# WeNet Toolkit — by WFS Project
 
-WFS Project · Windows 10/11 x64
+![WeNet Toolkit](assets/logo.png)
+
+**Network intelligence & management** · Windows 10/11 x64 · Native Rust/Win32
+
+Sebelumnya bernama WFS Network Toolkit. Kandidat source masih `1.3.0-rc.1`. Rebranding tidak mengubah format arsip, identitas installer, data pengguna, mutex mutasi, CLI `wfs-netctl.exe`, atau aturan keamanan. Nama EXE GUI baru: `WeNet-Toolkit.exe`. Baca [panduan rebranding dan upgrade](docs/WENET_BRANDING.md).
 
 ## Buka aplikasi
 
@@ -100,14 +104,14 @@ rustfmt --edition 2024 --check src/bin/native/toolkit_window.rs src/bin/native/i
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked --release --target x86_64-pc-windows-msvc
-$app = Start-Process .\target\x86_64-pc-windows-msvc\release\WFS-Network-Toolkit.exe -ArgumentList '--smoke-ui' -Wait -PassThru
+$app = Start-Process .\target\x86_64-pc-windows-msvc\release\WeNet-Toolkit.exe -ArgumentList '--smoke-ui' -Wait -PassThru
 $app.ExitCode
 New-Item -ItemType Directory -Force dist
-makensis .\installer\WFS-Network-Toolkit.nsi
+makensis .\installer\WeNet-Toolkit.nsi
 ```
 
 Smoke test memeriksa kontrol, navigasi halaman, footer, pilihan restore, kalkulator, pratinjau, dan inventaris tanpa mengubah jaringan. Kode keluar `0` berarti pemeriksaan lulus. Untuk cross-build, gunakan MinGW-w64 dengan target `x86_64-pc-windows-gnu` dan arahkan argumen `BIN_DIR` NSIS ke direktori build release.
 
 ## Pengembangan berikutnya
 
-Lanjutkan dengan [Next Prompt gate-first](docs/NEXT_PROMPT_V15_GATE_FIRST.md).
+Lanjutkan dengan [Next Prompt WeNet Toolkit](docs/NEXT_PROMPT_WENET.md).

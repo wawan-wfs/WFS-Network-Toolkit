@@ -261,7 +261,7 @@ impl Archive {
                 return Ok(0);
             }
         }
-        Err("Arsip bukan milik WFS Network Toolkit atau versi schema tidak didukung.".into())
+        Err("Arsip bukan milik WeNet Toolkit (WFS Network Toolkit) atau versi schema tidak didukung.".into())
     }
     pub fn writer(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

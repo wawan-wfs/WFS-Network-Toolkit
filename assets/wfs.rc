@@ -1,4 +1,4 @@
-101 ICON "assets/WFS-Network-Toolkit.ico"
+101 ICON "assets/WeNet-Toolkit.ico"
 1 24 "assets/wfs.manifest"
 
 1 VERSIONINFO
@@ -15,12 +15,12 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "WFS Project"
-            VALUE "FileDescription", "WFS Network Toolkit"
+            VALUE "FileDescription", "WeNet Toolkit"
             VALUE "FileVersion", "1.3.0.0"
-            VALUE "InternalName", "WFS-Network-Toolkit"
+            VALUE "InternalName", "WeNet-Toolkit"
             VALUE "LegalCopyright", "© WFS Project"
-            VALUE "OriginalFilename", "WFS-Network-Toolkit.exe"
-            VALUE "ProductName", "WFS Network Toolkit"
+            VALUE "OriginalFilename", "WeNet-Toolkit.exe"
+            VALUE "ProductName", "WeNet Toolkit"
             VALUE "ProductVersion", "1.3.0-rc.1"
         END
     END

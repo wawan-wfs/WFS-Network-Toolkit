@@ -1,4 +1,4 @@
-# Capability Matrix — 1.3.0-rc.1 (kandidat source)
+# Capability Matrix — WeNet Toolkit (kandidat 1.3.0-rc.1)
 
 | Area | Status | Batas bukti |
 | --- | --- | --- |

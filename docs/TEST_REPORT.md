@@ -1,3 +1,18 @@
+# WeNet Toolkit — status batch rebranding
+
+Baseline: 5da35be8cf0ba9869b6b6f0e33d4483a211f8998. Versi Cargo tetap 1.3.0-rc.1.
+
+- PASS: ikon sumber dirender dan tujuh ukuran ICO (16,24,32,48,64,128,256) dibuka dengan Pillow; byte ikon dan logo PNG dicocokkan ke hash Git blob. Ini validasi berkas, bukan LoadIconW di Windows.
+- PASS: pemeriksaan statis staged tree untuk nama produk, EXE, build resource, smoke test, shortcut, paket, workflow manual, kompatibilitas registry/data dan hash SQL/engine. Bukan kompilasi.
+- PARTIAL: source UI native, palette, resource, installer, docs. Tes kontrak SQLite sebelumnya 9/9 pada baseline, source SQL tidak berubah; hasil historis bukan rerun di batch ini.
+- BLOCKED: cargo/rustc/rustfmt tidak tersedia, jaringan container gagal DNS dan workflow manual belum dijalankan pada baseline terbaru. Run sukses yang ditemukan adalah commit 4bb5aca8, bukan kandidat.
+- BLOCKED: Rust compilation/Clippy/unit test, smoke Win32, UAC, installer, upgrade/uninstall, benchmark UDP, lab fisik. Tidak tersedia paket executable baru.
+- P1 fitur besar masih menunggu gate P0. Tidak ada perubahan pada konfigurasi jaringan produksi.
+
+Lihat WENET_BRANDING.md dan NEXT_PROMPT_WENET.md.
+
+---
+
 # Batch v1.4 — laporan gate aktual
 
 Baseline 22e97abcaee82f59feb46306c237b24d9b22d29c. Versi aplikasi tetap kandidat 1.3.0-rc.1.

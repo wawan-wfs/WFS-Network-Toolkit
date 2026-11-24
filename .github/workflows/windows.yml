@@ -1,4 +1,4 @@
-name: Windows build and unit tests
+name: WeNet Toolkit Windows — manual build and tests
 on:
   workflow_dispatch:
 permissions:
@@ -8,6 +8,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate rebranding and legacy identifiers
+        run: python scripts/test_branding.py
       - name: Test exact SQLite contract (offline fixtures)
         run: python scripts/test_alert_schema.py
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
@@ -25,7 +27,7 @@ jobs:
       - name: Smoke test native window and controls without changing network settings
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath .\target\release\WFS-Network-Toolkit.exe -ArgumentList '--smoke-ui' -PassThru
+          $p = Start-Process -FilePath .\target\release\WeNet-Toolkit.exe -ArgumentList '--smoke-ui' -PassThru
           if (-not $p.WaitForExit(30000)) {
             Stop-Process -Id $p.Id -Force
             throw "Native UI smoke test timed out"
@@ -35,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/Portable,dist/Installer | Out-Null
-          Copy-Item target/release/WFS-Network-Toolkit.exe,target/release/wfs-netctl.exe dist/Portable/
+          Copy-Item target/release/WeNet-Toolkit.exe,target/release/wfs-netctl.exe dist/Portable/
           Copy-Item README.md dist/
           Copy-Item docs dist/ -Recurse
           $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
@@ -44,14 +46,14 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
           }
           $version = (cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json).packages[0].version
-          $setup = (Join-Path $PWD "dist/Installer/WFS-Network-Toolkit-${version}-x64-Setup.exe")
-          $gui = (Resolve-Path target/release/WFS-Network-Toolkit.exe).Path
+          $setup = (Join-Path $PWD "dist/Installer/WeNet-Toolkit-${version}-x64-Setup.exe")
+          $gui = (Resolve-Path target/release/WeNet-Toolkit.exe).Path
           $cli = (Resolve-Path target/release/wfs-netctl.exe).Path
           $readme = (Resolve-Path README.md).Path
           $guide = (Resolve-Path docs/HARDWARE_ACCEPTANCE.md).Path
           Push-Location installer
           try {
-            & $nsis /INPUTCHARSET UTF8 "/DGUI_FILE=$gui" "/DCLI_FILE=$cli" "/DREAD_ME=$readme" "/DHARDWARE_GUIDE=$guide" "/DOUT_FILE=$setup" WFS-Network-Toolkit.nsi
+            & $nsis /INPUTCHARSET UTF8 "/DGUI_FILE=$gui" "/DCLI_FILE=$cli" "/DREAD_ME=$readme" "/DHARDWARE_GUIDE=$guide" "/DOUT_FILE=$setup" WeNet-Toolkit.nsi
           } finally { Pop-Location }
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'Installer build failed' }
           Push-Location dist
@@ -64,7 +66,7 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: wfs-network-toolkit-windows-x64
+          name: wenet-toolkit-windows-x64
           path: dist/
           if-no-files-found: error
           retention-days: 60

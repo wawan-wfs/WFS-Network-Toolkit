@@ -58,7 +58,7 @@ fn run() -> wfs_network_toolkit::Result<()> {
                 if legacy {
                     "IPv4 lama"
                 } else {
-                    "WFS Network Toolkit"
+                    "WeNet Toolkit"
                 }
             );
             println!(
@@ -196,7 +196,7 @@ fn run() -> wfs_network_toolkit::Result<()> {
             println!("{}", w::recover(id)?);
         }
         _ => println!(
-            "WFS Network Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
+            "WeNet Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
         ),
     }
     Ok(())

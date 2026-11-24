@@ -1,4 +1,4 @@
-# WFS Network Toolkit — Uji Windows dan Ethernet fisik
+# WeNet Toolkit (sebelumnya WFS Network Toolkit) — Uji Windows dan Ethernet fisik
 
 **Tujuan rilis:** buktikan MAC aktif berubah di Windows **dan** perangkat kedua melihat MAC baru sebagai Ethernet source. Pengujian tidak mengubah router atau jaringan produksi. Gunakan adaptor uji, Windows x64 dengan akses konsol lokal, perangkat peer yang dikelola, dan segmen Ethernet yang sama, idealnya switch uji terisolasi.
 

@@ -1,7 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("WFS Network Toolkit memerlukan Windows 10/11.");
+    eprintln!("WeNet Toolkit memerlukan Windows 10/11.");
 }
 #[cfg(windows)]
 fn main() {
@@ -135,7 +135,7 @@ mod desktop {
         token: u32,
     }
     fn popup(h: HWND, message: &str, flags: u32) -> i32 {
-        popup_titled(h, "WFS Network Toolkit", message, flags)
+        popup_titled(h, "WeNet Toolkit", message, flags)
     }
     fn popup_titled(h: HWND, title: &str, message: &str, flags: u32) -> i32 {
         // Win32 expects NUL-terminated UTF-16 for both pointers for the duration of the call.
@@ -200,7 +200,7 @@ mod desktop {
             typed_file_dialog(
                 h,
                 save,
-                "WFS-Network-Diagnostic.txt",
+                "WeNet-Diagnostic.txt",
                 "Laporan (*.txt)\0*.txt\0",
                 "txt",
             )
@@ -208,7 +208,7 @@ mod desktop {
             typed_file_dialog(
                 h,
                 save,
-                "WFS-Network-Backup.json",
+                "WeNet-Backup.json",
                 "Profil JSON (*.json)\0*.json\0Semua berkas\0*.*\0",
                 "json",
             )
@@ -653,7 +653,7 @@ mod desktop {
                     };
                     let report = if redact {
                         format!(
-                            "WFS Network Toolkit {VERSION}\r\nMode: disamarkan\r\nStatus link: {}\r\nStatus antarmuka: {}\r\nEthernet fisik: {}\r\nDHCP: {}\r\nJumlah IPv4: {}\r\nJumlah gateway: {}\r\nJumlah DNS aktif: {}\r\n",
+                            "WeNet Toolkit {VERSION}\r\nMode: disamarkan\r\nStatus link: {}\r\nStatus antarmuka: {}\r\nEthernet fisik: {}\r\nDHCP: {}\r\nJumlah IPv4: {}\r\nJumlah gateway: {}\r\nJumlah DNS aktif: {}\r\n",
                             a.link_label(),
                             a.admin.label(),
                             a.physical_ethernet,
@@ -665,7 +665,7 @@ mod desktop {
                     } else {
                         let meta = w::driver_info(&a.id)
                             .unwrap_or_else(|_| "Metadata driver tidak tersedia.".into());
-                        format!("WFS Network Toolkit {VERSION}\r\n{a:#?}\r\n{meta}\r\n")
+                        format!("WeNet Toolkit {VERSION}\r\n{a:#?}\r\n{meta}\r\n")
                     };
                     use std::io::Write;
                     let mut f = std::fs::OpenOptions::new()
