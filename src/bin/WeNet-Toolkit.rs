@@ -735,4 +735,5 @@ mod desktop {
 
     include!("native/toolkit_window.rs");
     include!("native/intelligence_window.rs");
+    include!("native/visual_window.rs");
 }

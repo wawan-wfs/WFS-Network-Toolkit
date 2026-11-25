@@ -1,3 +1,6 @@
+<!-- Visual Intelligence candidate: see docs/VISUAL_INTELLIGENCE.md for exact baseline CI and pending candidate gates. -->
+
+> Kandidat source: Graf bukti native, Grafik RX/TX, Binding DHCPv6/PD, dan IPAM metadata lokal. Belum ada build Windows untuk perubahan baru; baca [panduan dan batas bukti](docs/VISUAL_INTELLIGENCE.md).
 # WeNet Toolkit — dashboard and subnet development
 
 Verified Windows baseline ae36e729: [package](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45431125979/artifacts/14939820358). New source includes Dashboard jaringan and Ringkasan subnet IPv4/IPv6 under Analisis Jaringan; select a row and Buka modul for related existing view. Data is read-only and explicitly scoped. New candidate awaits manual CI. See TEST_REPORT.md.

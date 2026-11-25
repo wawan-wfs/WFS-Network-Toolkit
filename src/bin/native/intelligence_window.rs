@@ -48,7 +48,9 @@ const ALERT_MODE: usize = 23;
 const POLL_MODE: usize = 24;
 const DASHBOARD_MODE: usize = 25;
 const SUBNET_MODE: usize = 26;
-const INTEL_MODES: [&str; 27] = [
+const DHCP6_MODE: usize = 27;
+const NOTES_MODE: usize = 28;
+const INTEL_MODES: [&str; 29] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -76,6 +78,8 @@ const INTEL_MODES: [&str; 27] = [
     "Polling RouterOS",
     "Dashboard jaringan",
     "Ringkasan subnet IPv4/IPv6",
+    "Binding DHCPv6 / PD",
+    "IPAM metadata lokal",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -99,6 +103,7 @@ enum IntelReply {
     History(history::History),
     Stopped(Box<flow::Stats>),
     Alerts(PathBuf, Vec<AlertRecord>),
+    IpamNotes(Vec<ni::ipam_notes::Note>, bool),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -152,6 +157,10 @@ struct IntelState {
     poll_save_errors: std::collections::BTreeMap<String, String>,
     router_history: Option<(String, Box<Views>)>,
     dashboard_targets: Vec<usize>,
+    visual_edges: Vec<ni::visual::Edge>,
+    visual_series: Vec<ni::visual::Series>,
+    ipam_notes: Vec<ni::ipam_notes::Note>,
+    visible_notes: Vec<ni::ipam_notes::Note>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -722,6 +731,7 @@ impl Native {
                         | LEASE_MODE
                         | DASHBOARD_MODE
                         | SUBNET_MODE
+                        | DHCP6_MODE
                 )
                 && self.intel.work.is_none()
             {
@@ -843,6 +853,62 @@ impl Native {
             Ok(IntelReply::RouterHistory(key, Box::new(views)))
         })
     }
+    fn notes_path(&self) -> Result<PathBuf> {
+        Ok(self.primary_archive_path()?.with_file_name("ipam-notes-v1.sqlite3"))
+    }
+    fn load_notes(&mut self) -> Result<()> {
+        let path = self.notes_path()?;
+        self.intel.ipam_notes.clear();
+        self.intel.visible_notes.clear();
+        self.start_intel(move || {
+            ni::ipam_notes::page(&path).map(|rows| IntelReply::IpamNotes(rows, false))
+        })?;
+        self.render_intel();
+        Ok(())
+    }
+    fn save_notes(&mut self, undo: bool) -> Result<()> {
+        if self.intel.recovery_view.is_some() {
+            return Err("Kembali ke arsip utama sebelum mengedit metadata lokal.".into());
+        }
+        let path = self.notes_path()?;
+        let selected = self.selected_intel_row()
+            .and_then(|i| self.intel.visible_notes.get(i)).cloned();
+        let (draft, expected) = if undo {
+            let note = selected.ok_or("Pilih revisi untuk undo.")?;
+            let expected = note.revision;
+            (note, expected)
+        } else {
+            let draft = ni::ipam_notes::Note::parse(&get(self.h(INTEL_FILTER)))?;
+            let expected = if let Some(note) = selected {
+                if (note.scope.as_str(), note.cidr.as_str()) != (draft.scope.as_str(), draft.cidr.as_str()) {
+                    return Err("Key berbeda dari baris terpilih. Reset daftar sebelum membuat key baru.".into());
+                }
+                note.revision
+            } else {
+                0
+            };
+            (draft, expected)
+        };
+        if popup(
+            self.hwnd,
+            &format!(
+                "{} metadata lokal untuk {} / {} (revisi {})? Tidak ada perubahan jaringan atau reservasi router.",
+                if undo { "Undo" } else { "Simpan" },
+                draft.scope, draft.cidr, expected
+            ),
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+        ) == IDYES {
+            self.start_intel(move || {
+                if undo {
+                    ni::ipam_notes::undo(&path, &draft, ni::now())?;
+                } else {
+                    ni::ipam_notes::save(&path, &draft, expected, ni::now())?;
+                }
+                ni::ipam_notes::page(&path).map(|rows| IntelReply::IpamNotes(rows, true))
+            })?;
+        }
+        Ok(())
+    }
     fn load_alerts(&mut self, filter: String) -> Result<()> {
         let path = self.archive_path()?;
         self.intel.alert_rows.clear();
@@ -886,9 +952,16 @@ impl Native {
             match mode {
                 DEVICE_MODE => "Koneksi",
                 DASHBOARD_MODE => "Buka modul",
+                TOPOLOGY_MODE => "Graf bukti",
+                TREND_MODE => "Grafik",
+                NOTES_MODE => "Isi editor",
                 _ => "Detail IP",
             },
         );
+        if mode == NOTES_MODE {
+            set(self.h(INTEL_RECORD), "Simpan metadata");
+            set(self.h(INTEL_HISTORY), "Undo metadata");
+        }
         if mode == POLL_MODE {
             set(self.h(INTEL_ROUTER), "Mulai polling");
             set(self.h(INTEL_PROBE), "Hentikan target");
@@ -912,6 +985,7 @@ impl Native {
                 TREND_MODE | LEASE_MODE => "Filter sesi atau dua detik UTC untuk Arsip",
                 ALERT_MODE => "state=open/ack/recovered + site/VRF",
                 DASHBOARD_MODE | SUBNET_MODE => "Cari sumber, scope atau subnet",
+                NOTES_MODE => "scope|CIDR|label/reserved|alias|tag|catatan",
                 _ => "Cari IP, port, PID…",
             })
             .as_ptr() as isize,
@@ -977,6 +1051,7 @@ impl Native {
                         | LEASE_MODE
                         | DASHBOARD_MODE
                         | SUBNET_MODE
+                        | DHCP6_MODE
                 ) {
                     select(self.h(INTEL_MODE), 6);
                 }
@@ -990,6 +1065,13 @@ impl Native {
                 self.intel.alert_path = None;
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
+            }
+            Ok(IntelReply::IpamNotes(rows, saved)) => {
+                self.intel.ipam_notes = rows;
+                if saved {
+                    self.intel.filter.clear();
+                    set(self.h(INTEL_FILTER), "");
+                }
             }
             Ok(IntelReply::Stopped(stats)) => {
                 self.intel.alert_rows.clear();
@@ -1207,6 +1289,8 @@ impl Native {
                     self.load_storage()?;
                 } else if mode == ALERT_MODE {
                     self.load_alerts(self.intel.filter.clone())?;
+                } else if mode == NOTES_MODE {
+                    self.load_notes()?;
                 } else {
                     self.render_intel();
                 }
@@ -1245,6 +1329,10 @@ impl Native {
                         }
                     }
                     POLL_MODE => self.render_intel(),
+                    NOTES_MODE => {
+                        self.intel.filter = input;
+                        self.load_notes()?;
+                    }
                     DASHBOARD_MODE => {
                         self.intel.filter = input;
                         self.load_storage()?;
@@ -1268,9 +1356,33 @@ impl Native {
             }
             INTEL_IP_JOURNEY => {
                 let mode = selection(self.h(INTEL_MODE));
+                if mode == TOPOLOGY_MODE {
+                    if self.intel.visual_edges.is_empty() {
+                        return Err("Tidak ada relasi pada filter saat ini.".into());
+                    }
+                    return show_visual(
+                        self.hwnd,
+                        VisualData::Graph(self.intel.visual_edges.clone()),
+                        self.selected_intel_row().unwrap_or(0),
+                    );
+                }
                 let index = self
                     .selected_intel_row()
                     .ok_or("Pilih satu baris terlebih dahulu.")?;
+                if mode == NOTES_MODE {
+                    let note = self.intel.visible_notes.get(index).ok_or("Pilih metadata.")?;
+                    set(self.h(INTEL_FILTER), &note.editor());
+                    return Ok(());
+                }
+                if mode == TREND_MODE {
+                    let series = self
+                        .intel
+                        .visual_series
+                        .get(index)
+                        .cloned()
+                        .ok_or("Pilih interface dengan sampel.")?;
+                    return show_visual(self.hwnd, VisualData::Bandwidth(series), 0);
+                }
                 if mode == DASHBOARD_MODE {
                     let target = *self
                         .intel
@@ -1453,12 +1565,18 @@ impl Native {
             INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
                 self.archived_router_views()?
             }
+            INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
+                self.save_notes(true)?;
+            }
             INTEL_HISTORY => {
                 let path = self.archive_path()?;
                 let include_legacy = self.intel.recovery_view.is_none();
                 self.start_intel(move || {
                     combined_history(ni::now(), &path, include_legacy).map(IntelReply::History)
                 })?
+            }
+            INTEL_RECORD if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
+                self.save_notes(false)?;
             }
             INTEL_RECORD if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
                 if self.intel.recovery_view.is_some() {
@@ -1678,6 +1796,9 @@ impl Native {
         };
         let local = self.intel.local.as_deref();
         let mut dashboard_targets = Vec::new();
+        let mut visual_edges = Vec::new();
+        let mut visual_series = Vec::new();
+        let mut visible_notes = Vec::new();
         let description = match mode {
             DASHBOARD_MODE => {
                 let mut row = |values: [String; 4], detail: String, target: usize| {
@@ -1873,7 +1994,92 @@ impl Native {
                     "Inventaris berdasarkan interface, bukan daftar alamat bebas.".into(),
                     SUBNET_MODE,
                 );
+                row(
+                    [
+                        "DHCPv6 / PD".into(),
+                        "Binding RouterOS".into(),
+                        "Cakupan per router".into(),
+                        "Buka modul".into(),
+                    ],
+                    "Binding terpisah dari ND/SLAAC; tidak membuktikan host online.".into(),
+                    DHCP6_MODE,
+                );
+                row(
+                    [
+                        "IPAM metadata".into(),
+                        "Alias, tag, catatan".into(),
+                        "Data operator".into(),
+                        "Buka modul".into(),
+                    ],
+                    "Metadata administratif lokal terpisah dari observasi perangkat.".into(),
+                    NOTES_MODE,
+                );
                 "Dashboard snapshot. Pilih baris dan Buka modul. Tidak ada klaim jaringan sehat dari data yang tidak tersedia."
+            }
+            NOTES_MODE => {
+                for note in &self.intel.ipam_notes {
+                    let state = if !note.active {
+                        "Dibatalkan"
+                    } else if note.reserved {
+                        "Reservasi administratif"
+                    } else {
+                        "Label operator"
+                    };
+                    let summary = format!("{} · {}", note.alias, note.tags);
+                    if visible_notes.len() < INTEL_ROW_LIMIT
+                        && search.matches(&[&note.cidr, &note.scope, state, &summary])
+                    {
+                        visible_notes.push(note.clone());
+                    }
+                    push(
+                        [note.cidr.clone(), note.scope.clone(), state.into(), summary],
+                        &|| format!(
+                            "{} / {}\nAlias {} · tag {}\nCatatan: {}\nRevisi {} · UTC {}\nMetadata manual; tidak membuktikan assignment atau mengubah router. Histori tidak ditimpa.",
+                            note.scope, note.cidr, note.alias, note.tags, note.note, note.revision, note.recorded
+                        ),
+                    );
+                }
+                "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Pilih Isi editor untuk revisi; Simpan atau Undo. Reset sebelum membuat key baru. Backup DB metadata terpisah."
+            }
+            DHCP6_MODE => {
+                for (router, snapshot) in &self.intel.routers {
+                    if let Some(c) = snapshot.coverage.iter().rev().find(|c| {
+                        c.source == ni::router::Table::Dhcp6Binding.name()
+                    }) {
+                        push(
+                            [
+                                router.clone(),
+                                "Cakupan tabel DHCPv6".into(),
+                                format!("{:?}", c.state),
+                                format!("{} baris · UTC {}", c.rows, c.observed_at),
+                            ],
+                            &|| detail_source(c),
+                        );
+                    }
+                    for binding in &snapshot.dhcp6 {
+                        push(
+                            [
+                                format!("{}/{}", binding.prefix, binding.bits),
+                                format!("{router} / {}", binding.server),
+                                binding.state().into(),
+                                binding.kind().into(),
+                            ],
+                            &|| {
+                                format!(
+                                    "{} · {}\nRouter {} · server {}\nUTC {} · status {:?} · disabled {:?}\nBukan bukti SLAAC, ND, online, atau alamat bebas. VRF dan interface belum dipetakan.",
+                                    binding.prefix,
+                                    binding.kind(),
+                                    router,
+                                    binding.server,
+                                    binding.observed_at,
+                                    binding.status,
+                                    binding.disabled
+                                )
+                            },
+                        );
+                    }
+                }
+                "Binding DHCPv6 / PD dibaca HTTPS GET. Jika tabel tidak tersedia, status tidak diketahui; tidak menyatakan jaringan tanpa DHCPv6."
             }
             SUBNET_MODE => {
                 let mut groups = Vec::new();
@@ -2639,6 +2845,12 @@ impl Native {
                         ))
                     };
                 for r in observations {
+                    if mode == TOPOLOGY_MODE
+                        && visual_edges.len() < ni::visual::MAX_EDGES
+                        && search.matches(&[&r.subject, &r.target, r.basis, &r.scope])
+                    {
+                        visual_edges.push(ni::visual::Edge::from_observation(r));
+                    }
                     push(
                         [
                             r.subject.clone(),
@@ -2739,6 +2951,14 @@ impl Native {
                             display_opt(summary.p95_rx),
                             display_opt(summary.p95_tx)
                         );
+                        if visual_series.len() < INTEL_ROW_LIMIT
+                            && search.matches(&[name, router, &latest, &stats])
+                        {
+                            visual_series.push(ni::visual::Series::new(
+                                format!("{router} / {name}"),
+                                points,
+                            ));
+                        }
                         push(
                             [name.clone(), router.clone(), latest, stats.clone()],
                             &|| {
@@ -3006,7 +3226,10 @@ impl Native {
         for (id, show) in [
             (
                 INTEL_IP_JOURNEY,
-                matches!(mode, 0 | 1 | DEVICE_MODE | DASHBOARD_MODE),
+                matches!(
+                    mode,
+                    0 | 1 | DEVICE_MODE | DASHBOARD_MODE | TOPOLOGY_MODE | TREND_MODE | NOTES_MODE
+                ),
             ),
             (
                 INTEL_BACK,
@@ -3050,6 +3273,9 @@ impl Native {
         self.table_rows(INTEL_TABLE, &visible, 4);
         self.intel.details = details;
         self.intel.dashboard_targets = dashboard_targets;
+        self.intel.visual_edges = visual_edges;
+        self.intel.visual_series = visual_series;
+        self.intel.visible_notes = visible_notes;
         set(
             self.h(INTEL_STATUS),
             &format!(

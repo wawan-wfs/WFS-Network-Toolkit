@@ -991,6 +991,9 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
+                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
+                    normal && self.intel.recovery_view.is_none()
+                }
                 INTEL_RECORD | INTEL_HISTORY => normal,
                 INTEL_EXPORT => {
                     normal
@@ -1003,6 +1006,9 @@ impl Native {
                         && match selection(self.h(INTEL_MODE)) {
                             0 | 1 => self.intel.visible_ips.iter().any(Option::is_some),
                             DASHBOARD_MODE => !self.intel.dashboard_targets.is_empty(),
+                            TOPOLOGY_MODE => !self.intel.visual_edges.is_empty(),
+                            TREND_MODE => !self.intel.visual_series.is_empty(),
+                            NOTES_MODE => !self.intel.visible_notes.is_empty(),
                             DEVICE_MODE => self
                                 .intel
                                 .device
@@ -2293,6 +2299,37 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         if send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 0 {
             return Err("Filter alert terbuka masih menampilkan alert yang diakui.".into());
         }
+        smoke_trace("IPAM metadata fixture, editor and undo");
+        let notes_path = ui.notes_path()?;
+        let draft = ni::ipam_notes::Note::parse(
+            "lab/blue|192.0.2.0/24|reserved|Fixture|tag|offline",
+        )?;
+        ni::ipam_notes::save(&notes_path, &draft, 0, ni::now())?;
+        select(ui.h(INTEL_MODE), NOTES_MODE);
+        ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
+        finish(ui)?;
+        if ui.intel.visible_notes.len() != 1
+            || send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 1
+        {
+            return Err("Panel metadata tidak memuat fixture.".into());
+        }
+        send_native(
+            ui.h(INTEL_TABLE),
+            LVM_SETITEMSTATE,
+            0,
+            &item as *const _ as isize,
+        );
+        ui.action(INTEL_IP_JOURNEY, 0)?;
+        if get(ui.h(INTEL_FILTER)) != draft.editor() {
+            return Err("Editor metadata tidak memelihara key.".into());
+        }
+        let saved = ui.intel.visible_notes[0].clone();
+        ni::ipam_notes::undo(&notes_path, &saved, ni::now())?;
+        ui.action(INTEL_RESET_FILTER, 0)?;
+        finish(ui)?;
+        if ui.intel.visible_notes.first().is_none_or(|note| note.active || note.revision != 2) {
+            return Err("Undo metadata tidak tampil sebagai revisi nonaktif.".into());
+        }
         Ok(())
     })();
     ui.intel.archive_override = None;
@@ -2347,6 +2384,33 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     {
         return Err("Topologi fixture gagal menampilkan sumber dan relasi.".into());
     }
+    smoke_trace("Native graph and bandwidth viewer");
+    if ui.intel.visual_edges.len() != 2 {
+        return Err("Graf tidak cocok dengan relasi fixture.".into());
+    }
+    show_visual_inner(ui.hwnd, VisualData::Graph(ui.intel.visual_edges.clone()), 0, true)?;
+    let samples = std::collections::VecDeque::from([
+        ni::interface_trend::Point {
+            utc: 100,
+            received_utc: 101,
+            interval_s: Some(10),
+            rx_bps: Some(0),
+            tx_bps: Some(100),
+        },
+        ni::interface_trend::Point {
+            utc: 110,
+            received_utc: 111,
+            interval_s: Some(10),
+            rx_bps: None,
+            tx_bps: Some(200),
+        },
+    ]);
+    show_visual_inner(
+        ui.hwnd,
+        VisualData::Bandwidth(ni::visual::Series::new("fixture".into(), &samples)),
+        0,
+        true,
+    )?;
     select(ui.h(INTEL_MODE), IPAM_MODE);
     ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
     set(ui.h(INTEL_FILTER), "192.0.2.1/24");

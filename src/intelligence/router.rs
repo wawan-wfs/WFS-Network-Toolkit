@@ -105,9 +105,10 @@ pub enum Table {
     Pool4,
     Pool6,
     Neighbors,
+    Dhcp6Binding,
 }
 impl Table {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Identity,
         Self::Resource,
         Self::Interface,
@@ -131,6 +132,7 @@ impl Table {
         Self::Pool6,
         Self::Neighbors,
         Self::Connections,
+        Self::Dhcp6Binding,
     ];
     pub fn evidence_tables() -> &'static [Self] {
         &[
@@ -200,6 +202,9 @@ impl Table {
             Self::Neighbors => {
                 "/rest/ip/neighbor?.proplist=identity,interface,mac-address,discovered-by"
             }
+            Self::Dhcp6Binding => {
+                "/rest/ipv6/dhcp-server/binding?.proplist=address,server,status,disabled"
+            }
             Self::Connections => {
                 "/rest/ip/firewall/connection?.proplist=protocol,src-address,dst-address,reply-src-address,reply-dst-address,orig-bytes,repl-bytes,tcp-state,seen-reply,srcnat,dstnat,fasttrack,hw-offload"
             }
@@ -230,6 +235,7 @@ impl Table {
             Self::Pool4 => "RouterOS IPv4 Pools",
             Self::Pool6 => "RouterOS IPv6 Pools",
             Self::Neighbors => "RouterOS Discovery Neighbors",
+            Self::Dhcp6Binding => "RouterOS DHCPv6 Bindings",
         }
     }
 }
@@ -242,6 +248,7 @@ pub struct RouterSnapshot {
     pub resource: Option<RouterResource>,
     pub interfaces: Vec<RouterInterface>,
     pub inventory: Vec<RouterHost>,
+    pub dhcp6: Vec<super::dhcp6::Binding>,
     pub default_routes: Vec<RouterRoute>,
     pub connections: Vec<RouterConnection>,
     pub coverage: Vec<Coverage>,
@@ -260,6 +267,7 @@ impl RouterSnapshot {
             resource: None,
             interfaces: vec![],
             inventory: vec![],
+            dhcp6: vec![],
             default_routes: vec![],
             connections: vec![],
             coverage: vec![],
@@ -269,7 +277,7 @@ impl RouterSnapshot {
         }
     }
     pub fn ingest(&mut self, table: Table, result: Result<Vec<u8>>, stamp: u64) {
-        let result = result.and_then(|data| self.ingest_json(table, &data));
+        let result = result.and_then(|data| self.ingest_json(table, &data, stamp));
         let (rows, state, detail) = match result {
             Ok((rows, rejected)) => (
                 rows,
@@ -294,7 +302,7 @@ impl RouterSnapshot {
             detail,
         });
     }
-    fn ingest_json(&mut self, table: Table, data: &[u8]) -> Result<(usize, usize)> {
+    fn ingest_json(&mut self, table: Table, data: &[u8], stamp: u64) -> Result<(usize, usize)> {
         let payload: Value = serde_json::from_slice(data)
             .map_err(|_| "Respons RouterOS bukan JSON yang valid.".to_string())?;
         let rows = match payload {
@@ -344,6 +352,14 @@ impl RouterSnapshot {
                             rx_bytes: number(&row, "rx-byte"),
                             tx_bytes: number(&row, "tx-byte"),
                         });
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Table::Dhcp6Binding => {
+                    if let Some(binding) = super::dhcp6::Binding::parse(&row, stamp) {
+                        self.dhcp6.push(binding);
                         true
                     } else {
                         false
@@ -785,6 +801,24 @@ mod tests {
         assert!(!serde_json::to_string(&s).unwrap().contains("DO-NOT-EXPORT"));
         s.ingest(Table::Arp, Err("HTTP 403".into()), 101);
         assert_eq!(s.coverage[1].state, CoverageState::Unavailable);
+    }
+    #[test]
+    fn dhcp6_coverage_is_separate_and_redacts_client_identifiers() {
+        let mut s = RouterSnapshot::new(&Authority::parse("router.example").unwrap(), 100);
+        s.ingest(
+            Table::Dhcp6Binding,
+            Ok(br#"[{"address":"2001:db8:1::/64","server":"blue","status":"bound","disabled":"false","duid":"SECRET"},{"address":"2001:db8:1::1/64","server":"blue"}]"#.to_vec()),
+            101,
+        );
+        assert_eq!(s.dhcp6.len(), 1);
+        assert!(s.inventory.is_empty());
+        assert_eq!(s.coverage[0].state, CoverageState::Partial);
+        assert!(!serde_json::to_string(&s).unwrap().contains("SECRET"));
+        let mut empty = RouterSnapshot::new(&Authority::parse("router.example").unwrap(), 100);
+        empty.ingest(Table::Dhcp6Binding, Ok(b"[]".to_vec()), 101);
+        assert_eq!(empty.coverage[0].state, CoverageState::CompleteSnapshot);
+        empty.ingest(Table::Dhcp6Binding, Err("HTTP 404".into()), 102);
+        assert_eq!(empty.coverage[1].state, CoverageState::Unavailable);
     }
     #[test]
     fn parses_singleton_system_tables_and_only_accepts_default_routes() {

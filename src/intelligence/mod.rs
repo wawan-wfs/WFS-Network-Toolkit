@@ -11,15 +11,18 @@ pub mod alert_ledger;
 pub mod archive_ops;
 pub mod collector_alerts;
 pub mod device;
+pub mod dhcp6;
 pub mod flow;
 pub mod history;
 pub mod interface_trend;
+pub mod ipam_notes;
 pub mod network_map;
 pub mod overview;
 pub mod polling;
 pub mod router;
 pub mod router_history;
 pub mod store;
+pub mod visual;
 #[cfg(windows)]
 pub mod windows;
 

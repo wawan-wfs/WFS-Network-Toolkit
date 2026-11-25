@@ -1,3 +1,16 @@
+- Offline IPAM SQL contract: 7/7 passed on five exact matching inputs; Windows fixture smoke for visual viewers and metadata added, pending execution.
+
+- Added separate IPAM operator metadata ledger with immutable revisions, optimistic conflicts and undo; native editor controls and SQL contract tests.
+
+# Visual intelligence candidate — new source, gate pending
+
+- Accepted baseline CI 45632871037 (10 gates, 76 Rust tests, native smoke, packaging, checksums).
+- Native GDI evidence graph and per-interface bandwidth chart with bounded navigation and zoom.
+- RouterOS read-only DHCPv6 binding inventory, address vs PD and source coverage. No DUID storage or network writes.
+- New unit fixtures and viewer formatting check. New candidate not yet compiled; no new executable claim.
+
+---
+
 # CI format recovery — candidate, verification pending
 
 - Applied 13 exact formatting corrections from run 45552687279 (three Rust files).
