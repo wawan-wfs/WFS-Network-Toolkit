@@ -12,7 +12,9 @@ pub mod archive_ops;
 pub mod collector_alerts;
 pub mod device;
 pub mod dhcp6;
+pub mod dhcp6_history;
 pub mod flow;
+pub mod graph;
 pub mod history;
 pub mod interface_trend;
 pub mod ipam_notes;
@@ -22,6 +24,7 @@ pub mod polling;
 pub mod router;
 pub mod router_history;
 pub mod store;
+pub mod syslog;
 pub mod visual;
 #[cfg(windows)]
 pub mod windows;

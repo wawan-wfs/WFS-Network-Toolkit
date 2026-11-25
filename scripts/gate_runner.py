@@ -14,6 +14,7 @@ GATES = (
     ('sqlite', (sys.executable, 'scripts/test_alert_schema.py'), 90),
     ('gate_runner', (sys.executable, 'scripts/test_gate_runner.py'), 60),
     ('ipam_metadata', (sys.executable, 'scripts/test_ipam_schema.py'), 60),
+    ('dhcp6_history', (sys.executable, 'scripts/test_dhcp6_history_schema.py'), 60),
     ('rust_version', ('rustc', '+stable', '--version'), 30),
     ('format', ('cargo', '+stable', 'fmt', '--all', '--check'), 90),
     ('format_win32_toolkit', ('rustfmt', '+stable', '--edition', '2024', '--check', 'src/bin/native/toolkit_window.rs'), 90),

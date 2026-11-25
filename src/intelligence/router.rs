@@ -106,9 +106,10 @@ pub enum Table {
     Pool6,
     Neighbors,
     Dhcp6Binding,
+    Dhcp6Server,
 }
 impl Table {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Identity,
         Self::Resource,
         Self::Interface,
@@ -132,6 +133,7 @@ impl Table {
         Self::Pool6,
         Self::Neighbors,
         Self::Connections,
+        Self::Dhcp6Server,
         Self::Dhcp6Binding,
     ];
     pub fn evidence_tables() -> &'static [Self] {
@@ -202,6 +204,9 @@ impl Table {
             Self::Neighbors => {
                 "/rest/ip/neighbor?.proplist=identity,interface,mac-address,discovered-by"
             }
+            Self::Dhcp6Server => {
+                "/rest/ipv6/dhcp-server?.proplist=name,interface,disabled,invalid"
+            }
             Self::Dhcp6Binding => {
                 "/rest/ipv6/dhcp-server/binding?.proplist=address,server,status,disabled"
             }
@@ -236,6 +241,7 @@ impl Table {
             Self::Pool6 => "RouterOS IPv6 Pools",
             Self::Neighbors => "RouterOS Discovery Neighbors",
             Self::Dhcp6Binding => "RouterOS DHCPv6 Bindings",
+            Self::Dhcp6Server => "RouterOS DHCPv6 Servers",
         }
     }
 }
@@ -249,6 +255,7 @@ pub struct RouterSnapshot {
     pub interfaces: Vec<RouterInterface>,
     pub inventory: Vec<RouterHost>,
     pub dhcp6: Vec<super::dhcp6::Binding>,
+    pub dhcp6_servers: Vec<super::dhcp6::Server>,
     pub default_routes: Vec<RouterRoute>,
     pub connections: Vec<RouterConnection>,
     pub coverage: Vec<Coverage>,
@@ -268,6 +275,7 @@ impl RouterSnapshot {
             interfaces: vec![],
             inventory: vec![],
             dhcp6: vec![],
+            dhcp6_servers: vec![],
             default_routes: vec![],
             connections: vec![],
             coverage: vec![],
@@ -352,6 +360,14 @@ impl RouterSnapshot {
                             rx_bytes: number(&row, "rx-byte"),
                             tx_bytes: number(&row, "tx-byte"),
                         });
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Table::Dhcp6Server => {
+                    if let Some(server) = super::dhcp6::Server::parse(&row) {
+                        self.dhcp6_servers.push(server);
                         true
                     } else {
                         false

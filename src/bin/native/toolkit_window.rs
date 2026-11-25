@@ -182,7 +182,7 @@ fn bg() -> u32 {
     color(255, 255, 255)
 }
 fn rail() -> u32 {
-    color(241, 246, 249)
+    color(238, 245, 249)
 }
 fn ink() -> u32 {
     color(16, 44, 70)
@@ -197,7 +197,7 @@ fn line() -> u32 {
     color(207, 220, 227)
 }
 fn selected_nav() -> u32 {
-    color(219, 241, 239)
+    color(210, 239, 235)
 }
 fn button_border() -> u32 {
     color(115, 137, 152)
@@ -991,13 +991,19 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
+                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => false,
+                INTEL_RECORD
+                    if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) =>
+                {
+                    normal && self.intel.recovery_view.is_none()
+                }
                 INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
                     normal && self.intel.recovery_view.is_none()
                 }
                 INTEL_RECORD | INTEL_HISTORY => normal,
                 INTEL_EXPORT => {
                     normal
-                        && (matches!(selection(self.h(INTEL_MODE)), 0 | STORAGE_MODE)
+                        && (matches!(selection(self.h(INTEL_MODE)), 0 | STORAGE_MODE | NOTES_MODE)
                             || selection(self.h(INTEL_MODE)) == ARCHIVE_MODE
                                 && self.intel.archive_query.is_some())
                 }
@@ -2333,6 +2339,56 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
             .is_none_or(|note| note.active || note.revision != 2)
         {
             return Err("Undo metadata tidak tampil sebagai revisi nonaktif.".into());
+        }
+        smoke_trace("DHCPv6 scoped history fixture and IPAM backup");
+        let mut router = RouterSnapshot::new(&Authority::parse("dhcp6-fixture.test")?, 100);
+        use ni::router::Table as RouterTable;
+        router.ingest(
+            RouterTable::Vrf,
+            Ok(br#"[{"name":"blue","interfaces":"ether1"}]"#.to_vec()),
+            100,
+        );
+        router.ingest(
+            RouterTable::Dhcp6Server,
+            Ok(br#"[{"name":"dhcp","interface":"ether1","disabled":false}]"#.to_vec()),
+            100,
+        );
+        router.ingest(
+            RouterTable::Dhcp6Binding,
+            Ok(br#"[{"address":"2001:db8::/64","server":"dhcp","status":"bound","disabled":false}]"#.to_vec()),
+            101,
+        );
+        let captured = ni::dhcp6_history::Capture::from_snapshot(&router)?;
+        let dhcp_path = ui.dhcp6_history_path()?;
+        ni::dhcp6_history::save(&dhcp_path, &captured)?;
+        set(ui.h(INTEL_HOST), &router.authority);
+        select(ui.h(INTEL_MODE), DHCP6_HISTORY_MODE);
+        ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
+        ui.action(INTEL_HISTORY, 0)?;
+        finish(ui)?;
+        if send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 1
+            || !ui.intel.details.iter().any(|d| d.contains("VRF blue"))
+        {
+            return Err("Histori DHCPv6 fixture gagal menjaga scope.".into());
+        }
+        let backup = notes_path.with_file_name("notes-smoke-backup.sqlite3");
+        ni::ipam_notes::backup(&notes_path, &backup)?;
+        if ni::ipam_notes::page(&backup)? != ni::ipam_notes::page(&notes_path)? {
+            return Err("Backup IPAM fixture tidak cocok.".into());
+        }
+        let summary = notes_path.with_file_name("notes-smoke-summary.json");
+        ni::ipam_notes::export_summary(&notes_path, &summary)?;
+        if std::fs::read_to_string(&summary).map_err(|e| e.to_string())?.contains("192.0.2") {
+            return Err("Ringkasan IPAM memuat alamat.".into());
+        }
+        smoke_trace("Offline syslog summary fixture");
+        ui.intel.syslog_summary = Some(ni::syslog::summarize(b"<13>fixture")?);
+        select(ui.h(INTEL_MODE), SYSLOG_MODE);
+        ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
+        if send_native(ui.h(INTEL_TABLE), LVM_GETITEMCOUNT, 0, 0) != 2
+            || get(ui.h(INTEL_IMPORT)) != "Impor Syslog"
+        {
+            return Err("Ringkasan syslog fixture gagal.".into());
         }
         Ok(())
     })();

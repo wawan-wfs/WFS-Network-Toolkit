@@ -50,7 +50,9 @@ const DASHBOARD_MODE: usize = 25;
 const SUBNET_MODE: usize = 26;
 const DHCP6_MODE: usize = 27;
 const NOTES_MODE: usize = 28;
-const INTEL_MODES: [&str; 29] = [
+const DHCP6_HISTORY_MODE: usize = 29;
+const SYSLOG_MODE: usize = 30;
+const INTEL_MODES: [&str; 31] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -80,6 +82,8 @@ const INTEL_MODES: [&str; 29] = [
     "Ringkasan subnet IPv4/IPv6",
     "Binding DHCPv6 / PD",
     "IPAM metadata lokal",
+    "Histori DHCPv6 / PD",
+    "Syslog offline",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -104,6 +108,8 @@ enum IntelReply {
     Stopped(Box<flow::Stats>),
     Alerts(PathBuf, Vec<AlertRecord>),
     IpamNotes(Vec<ni::ipam_notes::Note>, bool),
+    Dhcp6History(String, Vec<ni::dhcp6_history::Capture>),
+    Syslog(ni::syslog::Summary),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -157,10 +163,13 @@ struct IntelState {
     poll_save_errors: std::collections::BTreeMap<String, String>,
     router_history: Option<(String, Box<Views>)>,
     dashboard_targets: Vec<usize>,
+    dashboard_charts: std::collections::BTreeMap<usize, ni::visual::Series>,
     visual_edges: Vec<ni::visual::Edge>,
     visual_series: Vec<ni::visual::Series>,
     ipam_notes: Vec<ni::ipam_notes::Note>,
     visible_notes: Vec<ni::ipam_notes::Note>,
+    dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
+    syslog_summary: Option<ni::syslog::Summary>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -515,6 +524,7 @@ impl Native {
         self.intel.pivot_scope = None;
         self.intel.history = None;
         self.intel.router_history = None;
+        self.intel.dhcp6_history = None;
         self.intel.storage_loaded = false;
         self.intel.storage_loading = false;
         self.intel.storage_failed = false;
@@ -853,6 +863,40 @@ impl Native {
             Ok(IntelReply::RouterHistory(key, Box::new(views)))
         })
     }
+    fn dhcp6_history_path(&self) -> Result<PathBuf> {
+        Ok(self.primary_archive_path()?.with_file_name("dhcp6-history-v1.sqlite3"))
+    }
+    fn load_dhcp6_history(&mut self, save: bool) -> Result<()> {
+        if save && self.intel.recovery_view.is_some() {
+            return Err("Arsip pemulihan hanya-baca.".into());
+        }
+        let key = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
+        let path = self.dhcp6_history_path()?;
+        let sample = if save {
+            let snapshot = self.intel.routers.get(&key).ok_or("Baca router ini terlebih dahulu.")?;
+            let sample = ni::dhcp6_history::Capture::from_snapshot(snapshot)?;
+            if popup(
+                self.hwnd,
+                "Simpan snapshot DHCPv6 dengan alamat, prefix dan scope ke database lokal terpisah? DUID dan kredensial tidak disimpan. Data tidak disamarkan.",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+            ) != IDYES {
+                return Ok(());
+            }
+            Some(sample)
+        } else {
+            None
+        };
+        self.intel.dhcp6_history = None;
+        self.start_intel(move || {
+            if let Some(sample) = sample {
+                ni::dhcp6_history::save(&path, &sample)?;
+            }
+            let rows = ni::dhcp6_history::page(&path, &key)?;
+            Ok(IntelReply::Dhcp6History(key, rows))
+        })?;
+        self.render_intel();
+        Ok(())
+    }
     fn notes_path(&self) -> Result<PathBuf> {
         Ok(self
             .primary_archive_path()?
@@ -970,7 +1014,15 @@ impl Native {
                 _ => "Detail IP",
             },
         );
+        if mode == SYSLOG_MODE {
+            set(self.h(INTEL_IMPORT), "Impor Syslog");
+        }
+        if mode == DHCP6_MODE || mode == DHCP6_HISTORY_MODE {
+            set(self.h(INTEL_RECORD), "Simpan DHCPv6");
+            set(self.h(INTEL_HISTORY), "Histori DHCPv6");
+        }
         if mode == NOTES_MODE {
+            set(self.h(INTEL_EXPORT), "Ekspor/backup");
             set(self.h(INTEL_RECORD), "Simpan metadata");
             set(self.h(INTEL_HISTORY), "Undo metadata");
         }
@@ -1077,6 +1129,18 @@ impl Native {
                 self.intel.alert_path = None;
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
+            }
+            Ok(IntelReply::Syslog(summary)) => {
+                self.intel.syslog_summary = Some(summary);
+                select(self.h(INTEL_MODE), SYSLOG_MODE);
+                self.intel.mode = SYSLOG_MODE;
+                self.intel_mode_labels(SYSLOG_MODE);
+            }
+            Ok(IntelReply::Dhcp6History(key, rows)) => {
+                self.intel.dhcp6_history = Some((key, rows));
+                select(self.h(INTEL_MODE), DHCP6_HISTORY_MODE);
+                self.intel.mode = DHCP6_HISTORY_MODE;
+                self.intel_mode_labels(DHCP6_HISTORY_MODE);
             }
             Ok(IntelReply::IpamNotes(rows, saved)) => {
                 self.intel.ipam_notes = rows;
@@ -1247,7 +1311,7 @@ impl Native {
             }
             Ok(IntelReply::Export(path)) => {
                 notice = Some(Notice::Information(format!(
-                    "Laporan CSV disimpan di {}",
+                    "Berkas ekspor disimpan di {}",
                     path.display()
                 )))
             }
@@ -1277,6 +1341,7 @@ impl Native {
                 let mode = selection(self.h(INTEL_MODE));
                 if mode != self.intel.mode {
                     self.intel.router_history = None;
+                    self.intel.dhcp6_history = None;
                     self.intel.previous_mode = None;
                     self.intel.pivot_scope = None;
                     self.intel.filter.clear();
@@ -1345,6 +1410,10 @@ impl Native {
                         self.intel.filter = input;
                         self.load_notes()?;
                     }
+                    DHCP6_HISTORY_MODE => {
+                        self.intel.filter = input;
+                        self.load_dhcp6_history(false)?;
+                    }
                     DASHBOARD_MODE => {
                         self.intel.filter = input;
                         self.load_storage()?;
@@ -1400,6 +1469,9 @@ impl Native {
                     return show_visual(self.hwnd, VisualData::Bandwidth(series), 0);
                 }
                 if mode == DASHBOARD_MODE {
+                    if let Some(series) = self.intel.dashboard_charts.get(&index).cloned() {
+                        return show_visual(self.hwnd, VisualData::Bandwidth(series), 0);
+                    }
                     let target = *self
                         .intel
                         .dashboard_targets
@@ -1518,6 +1590,15 @@ impl Native {
                     })?;
                 }
             }
+            INTEL_IMPORT if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => {
+                if let Some(path) = typed_file_dialog(
+                    self.hwnd, false, "", "Syslog (*.log;*.txt)\0*.log;*.txt\0", "",
+                )? {
+                    self.intel.syslog_summary = None;
+                    self.start_intel(move || ni::syslog::read(&path).map(IntelReply::Syslog))?;
+                    self.render_intel();
+                }
+            }
             INTEL_IMPORT => {
                 if let Some(path) = typed_file_dialog(
                     self.hwnd,
@@ -1581,6 +1662,9 @@ impl Native {
             INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
                 self.archived_router_views()?
             }
+            INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) => {
+                self.load_dhcp6_history(false)?;
+            }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
                 self.save_notes(true)?;
             }
@@ -1590,6 +1674,9 @@ impl Native {
                 self.start_intel(move || {
                     combined_history(ni::now(), &path, include_legacy).map(IntelReply::History)
                 })?
+            }
+            INTEL_RECORD if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) => {
+                self.load_dhcp6_history(true)?;
             }
             INTEL_RECORD if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
                 self.save_notes(false)?;
@@ -1686,7 +1773,33 @@ impl Native {
                 }
             }
             INTEL_EXPORT => {
-                if selection(self.h(INTEL_MODE)) == ARCHIVE_MODE {
+                if selection(self.h(INTEL_MODE)) == NOTES_MODE {
+                    let source = self.notes_path()?;
+                    let redact = checked(self.h(INTEL_REDACT));
+                    let (name, filter, ext) = if redact {
+                        ("WeNet-IPAM-summary.json", "JSON (*.json)\0*.json\0", "json")
+                    } else {
+                        ("WeNet-IPAM-backup.sqlite3", "SQLite (*.sqlite3)\0*.sqlite3\0", "sqlite3")
+                    };
+                    let Some(dest) = typed_file_dialog(self.hwnd, true, name, filter, ext)? else {
+                        return Ok(());
+                    };
+                    if !redact && popup(
+                        self.hwnd,
+                        "Backup IPAM memuat alamat, scope dan catatan operator tanpa penyamaran. Simpan ke file baru?",
+                        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+                    ) != IDYES {
+                        return Ok(());
+                    }
+                    self.start_intel(move || {
+                        if redact {
+                            ni::ipam_notes::export_summary(&source, &dest)?;
+                        } else {
+                            ni::ipam_notes::backup(&source, &dest)?;
+                        }
+                        Ok(IntelReply::Export(dest))
+                    })?;
+                } else if selection(self.h(INTEL_MODE)) == ARCHIVE_MODE {
                     let q = self
                         .intel
                         .archive_query
@@ -1812,15 +1925,22 @@ impl Native {
         };
         let local = self.intel.local.as_deref();
         let mut dashboard_targets = Vec::new();
+        let mut dashboard_charts = std::collections::BTreeMap::new();
         let mut visual_edges = Vec::new();
         let mut visual_series = Vec::new();
         let mut visible_notes = Vec::new();
         let description = match mode {
             DASHBOARD_MODE => {
-                let mut row = |values: [String; 4], detail: String, target: usize| {
+                let mut row = |values: [String; 4],
+                               detail: String,
+                               target: usize,
+                               series: Option<ni::visual::Series>| {
                     if search.matches(&values.each_ref().map(String::as_str))
                         && dashboard_targets.len() < INTEL_ROW_LIMIT
                     {
+                        if let Some(series) = series {
+                            dashboard_charts.insert(dashboard_targets.len(), series);
+                        }
                         dashboard_targets.push(target);
                     }
                     push(values, &|| detail.clone());
@@ -1840,6 +1960,7 @@ impl Native {
                             c.unavailable, c.stale
                         ),
                         1,
+                        None,
                     );
                 } else {
                     row(
@@ -1851,6 +1972,7 @@ impl Native {
                         ],
                         "Gunakan Muat ulang untuk snapshot read-only PC ini.".into(),
                         1,
+                        None,
                     );
                 }
                 for (key, s) in &self.intel.routers {
@@ -1874,7 +1996,44 @@ impl Native {
                             poll.and_then(|p| p.outcome)
                         ),
                         5,
+                        None,
                     );
+                    if let Some(resource) = &s.resource
+                        && let Some(coverage) = s.coverage.iter().rev().find(|c| {
+                            c.source == ni::router::Table::Resource.name()
+                                && c.state != ni::CoverageState::Unavailable
+                        })
+                    {
+                        let memory = resource
+                            .free_memory_bytes
+                            .zip(resource.total_memory_bytes)
+                            .filter(|(free, total)| *total != 0 && free <= total)
+                            .map(|(free, total)| {
+                                (u128::from(total - free) * 100 / u128::from(total)) as u64
+                            });
+                        row(
+                            [
+                                "Resource MikroTik".into(),
+                                key.clone(),
+                                format!(
+                                    "CPU {}% · RAM {}%",
+                                    display_opt(resource.cpu_percent.filter(|v| *v <= 100)),
+                                    display_opt(memory),
+                                ),
+                                format!(
+                                    "{} · UTC {}",
+                                    age(coverage.observed_at),
+                                    coverage.observed_at
+                                ),
+                            ],
+                            format!(
+                                "Versi {} · uptime {:?}. CPU/RAM adalah snapshot Resource, bukan status online. Cakupan {:?}.",
+                                resource.version, resource.uptime, coverage.state
+                            ),
+                            6,
+                            None,
+                        );
+                    }
                     if let Some(trend) = self.intel.trends.get(key) {
                         for (name, points) in &trend.streams {
                             let summary = interface_trend::summarize(points);
@@ -1897,6 +2056,7 @@ impl Native {
                                         summary.valid_intervals
                                     ),
                                     TREND_MODE,
+                                    Some(ni::visual::Series::new(format!("{key} / {name}"), points)),
                                 );
                             }
                         }
@@ -1924,6 +2084,7 @@ impl Native {
                             stats.alert_error
                         ),
                         13,
+                        None,
                     );
                     for (scope, stats) in c.source_stats() {
                         row(
@@ -1935,6 +2096,7 @@ impl Native {
                             ],
                             "Counter sesi per profil/domain; tidak membuktikan keterjangkauan atau volume trafik unik.".into(),
                             13,
+                            None,
                         );
                     }
                 } else {
@@ -1947,6 +2109,7 @@ impl Native {
                         ],
                         "Tidak ada penerimaan UDP pada sesi ini.".into(),
                         13,
+                        None,
                     );
                 }
                 if let Some(s) = &self.intel.storage {
@@ -1968,6 +2131,7 @@ impl Native {
                             s.wal_bytes
                         ),
                         STORAGE_MODE,
+                        None,
                     );
                 } else {
                     row(
@@ -1988,6 +2152,7 @@ impl Native {
                         ],
                         "Tidak ada hasil pengukuran arsip saat ini. Gagal membaca tidak berarti database kosong.".into(),
                         STORAGE_MODE,
+                        None,
                     );
                 }
                 row(
@@ -1999,6 +2164,7 @@ impl Native {
                     ],
                     "Ledger dibaca ketika modul dibuka; tidak menggunakan jumlah halaman terfilter sebagai jumlah semua alert.".into(),
                     ALERT_MODE,
+                    None,
                 );
                 row(
                     [
@@ -2009,6 +2175,7 @@ impl Native {
                     ],
                     "Inventaris berdasarkan interface, bukan daftar alamat bebas.".into(),
                     SUBNET_MODE,
+                    None,
                 );
                 row(
                     [
@@ -2019,6 +2186,7 @@ impl Native {
                     ],
                     "Binding terpisah dari ND/SLAAC; tidak membuktikan host online.".into(),
                     DHCP6_MODE,
+                    None,
                 );
                 row(
                     [
@@ -2029,8 +2197,31 @@ impl Native {
                     ],
                     "Metadata administratif lokal terpisah dari observasi perangkat.".into(),
                     NOTES_MODE,
+                    None,
                 );
-                "Dashboard snapshot. Pilih baris dan Buka modul. Tidak ada klaim jaringan sehat dari data yang tidak tersedia."
+                row(
+                    [
+                        "Histori DHCPv6".into(),
+                        "Snapshot persisten".into(),
+                        "Scope router".into(),
+                        "Buka modul".into(),
+                    ],
+                    "Histori tanpa DUID; tidak menyimpulkan interval assignment.".into(),
+                    DHCP6_HISTORY_MODE,
+                    None,
+                );
+                row(
+                    [
+                        "Syslog offline".into(),
+                        "Ringkasan header".into(),
+                        "Sumber tidak diautentikasi".into(),
+                        "Buka modul".into(),
+                    ],
+                    "Impor file lokal pilihan operator; tidak ada listener atau penyimpanan pesan.".into(),
+                    SYSLOG_MODE,
+                    None,
+                );
+                "Dashboard snapshot. Buka modul; baris bandwidth membuka grafik scope eksak. Tidak ada klaim jaringan sehat dari data yang tidak tersedia."
             }
             NOTES_MODE => {
                 for note in &self.intel.ipam_notes {
@@ -2065,6 +2256,67 @@ impl Native {
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Pilih Isi editor untuk revisi; Simpan atau Undo. Reset sebelum membuat key baru. Backup DB metadata terpisah."
             }
+            SYSLOG_MODE => {
+                if let Some(summary) = &self.intel.syslog_summary {
+                    push(
+                        [
+                            "Ringkasan impor".into(),
+                            format!("{} diterima", summary.accepted),
+                            format!("{} ditolak", summary.rejected),
+                            if summary.limited { "Batas baris" } else { "File dibaca" }.into(),
+                        ],
+                        &|| "Header tidak diautentikasi. Isi pesan dan identitas tidak disimpan.".into(),
+                    );
+                    for ((format, facility, severity), count) in &summary.groups {
+                        push(
+                            [
+                                format!("{format:?}"),
+                                format!("Facility {facility}"),
+                                format!("Severity {severity}"),
+                                format!("{count} baris"),
+                            ],
+                            &|| format!(
+                                "Header tidak diautentikasi. {} diterima, {} ditolak; batas baris {}. Pesan, identitas host dan timestamp tidak disimpan.",
+                                summary.accepted, summary.rejected, summary.limited
+                            ),
+                        );
+                    }
+                    "Ringkasan Syslog offline. Tidak membuktikan pengirim atau insiden; tidak ada listener jaringan. Detail memperlihatkan jumlah ditolak."
+                } else {
+                    "Impor Syslog: pilih file UTF-8 lokal (maksimal 1 MiB / 10.000 baris). Hanya facility/severity disimpan dalam sesi."
+                }
+            }
+            DHCP6_HISTORY_MODE => {
+                if let Some((router, rows)) = &self.intel.dhcp6_history {
+                    for capture in rows {
+                        push(
+                            [
+                                format!("UTC {}", capture.stamp),
+                                router.clone(),
+                                format!("{:?}", capture.coverage),
+                                format!("{} / {} baris", capture.rows.len(), capture.reported),
+                            ],
+                            &|| {
+                                let sample = capture.rows.iter().take(100).map(|r| {
+                                    format!(
+                                        "{}/{} · {} · {} · if {} · VRF {}",
+                                        r.binding.prefix, r.binding.bits, r.binding.server,
+                                        r.binding.state(), r.scope.interface.as_deref().unwrap_or("?"),
+                                        r.scope.vrf.as_deref().unwrap_or("?")
+                                    )
+                                }).collect::<Vec<_>>().join("\n");
+                                format!(
+                                    "{} · UTC {} · {:?}\n{} dari {} baris disimpan; detail maks. 100. Histori snapshot, bukan interval assignment.\n{sample}",
+                                    router, capture.stamp, capture.coverage, capture.rows.len(), capture.reported
+                                )
+                            },
+                        );
+                    }
+                    "Histori eksak router yang dimuat; ubah host dan klik Histori DHCPv6 untuk muat ulang. Maksimum 20 snapshot terbaru; gap bukan bukti prefix bebas."
+                } else {
+                    "Masukkan host router lalu Histori DHCPv6. Gunakan Simpan DHCPv6 untuk menyimpan snapshot yang telah dibaca."
+                }
+            }
             DHCP6_MODE => {
                 for (router, snapshot) in &self.intel.routers {
                     if let Some(c) = snapshot
@@ -2083,7 +2335,9 @@ impl Native {
                             &|| detail_source(c),
                         );
                     }
+                    let index = ni::dhcp6::ScopeIndex::new(snapshot);
                     for binding in &snapshot.dhcp6 {
+                        let scope = index.scope(binding);
                         push(
                             [
                                 format!("{}/{}", binding.prefix, binding.bits),
@@ -2093,14 +2347,16 @@ impl Native {
                             ],
                             &|| {
                                 format!(
-                                    "{} · {}\nRouter {} · server {}\nUTC {} · status {:?} · disabled {:?}\nBukan bukti SLAAC, ND, online, atau alamat bebas. VRF dan interface belum dipetakan.",
+                                    "{} · {}\nRouter {} · server {}\nUTC {} · status {:?} · disabled {:?}\nInterface {} · VRF {}. Pemetaan hanya tabel lengkap dan selaras ≤60 detik. Bukan bukti SLAAC, ND, online, atau alamat bebas.",
                                     binding.prefix,
                                     binding.kind(),
                                     router,
                                     binding.server,
                                     binding.observed_at,
                                     binding.status,
-                                    binding.disabled
+                                    binding.disabled,
+                                    scope.interface.as_deref().unwrap_or("tidak diketahui"),
+                                    scope.vrf.as_deref().unwrap_or("tidak diketahui")
                                 )
                             },
                         );
@@ -2848,6 +3104,17 @@ impl Native {
                 "Alert persisten tanpa popup. Cari: state=open/ack/recovered ditambah teks scope. Maksimal 1.000 terbaru. Pulih berarti observasi membaik; sesi lama tidak dinilai pulih otomatis."
             }
             TOPOLOGY_MODE | IPAM_MODE | LEASE_MODE => {
+                if mode == TOPOLOGY_MODE {
+                    for (authority, (topology, _)) in &self.intel.network_views {
+                        for r in topology {
+                            if visual_edges.len() < ni::visual::MAX_EDGES
+                                && search.matches(&[&r.subject, &r.target, r.basis, &r.scope])
+                            {
+                                visual_edges.push(ni::visual::Edge::scoped(authority, r));
+                            }
+                        }
+                    }
+                }
                 let observations: Box<dyn Iterator<Item = &Observation>> =
                     if mode == LEASE_MODE {
                         if let Some((_, view)) = &self.intel.router_history {
@@ -2872,12 +3139,6 @@ impl Native {
                         ))
                     };
                 for r in observations {
-                    if mode == TOPOLOGY_MODE
-                        && visual_edges.len() < ni::visual::MAX_EDGES
-                        && search.matches(&[&r.subject, &r.target, r.basis, &r.scope])
-                    {
-                        visual_edges.push(ni::visual::Edge::from_observation(r));
-                    }
                     push(
                         [
                             r.subject.clone(),
@@ -3300,6 +3561,7 @@ impl Native {
         self.table_rows(INTEL_TABLE, &visible, 4);
         self.intel.details = details;
         self.intel.dashboard_targets = dashboard_targets;
+        self.intel.dashboard_charts = dashboard_charts;
         self.intel.visual_edges = visual_edges;
         self.intel.visual_series = visual_series;
         self.intel.visible_notes = visible_notes;

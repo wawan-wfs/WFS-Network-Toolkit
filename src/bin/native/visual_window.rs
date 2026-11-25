@@ -8,6 +8,9 @@ struct VisualState {
     data: VisualData,
     selected: usize,
     span: usize,
+    graph: Option<ni::graph::Graph>,
+    viewport: ni::graph::Viewport,
+    drag: Option<(i32, i32)>,
 }
 impl VisualState {
     fn len(&self) -> usize {
@@ -25,6 +28,10 @@ impl VisualState {
     }
 
     fn zoom(&mut self, more: bool) {
+        if matches!(&self.data, VisualData::Graph(_)) {
+            let factor = if more { 20 } else { -20 };
+            self.viewport.zoom(self.viewport.scale + factor);
+        }
         self.span = match &self.data {
             VisualData::Graph(_) => {
                 if more {
@@ -120,78 +127,76 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
     vis_text(
         dc,
         vis_rect(18, 30, width - 36, 18),
-        "← → / ↑ ↓ / roda mouse: navigasi   + / −: zoom   Esc: tutup",
+        "← → / roda mouse: bukti   W A S D / drag kanan: pan   + / −: zoom   Esc: tutup",
         color(210, 228, 230),
         false,
     );
     match &state.data {
         VisualData::Graph(edges) => {
-            let span = state.span.max(1);
-            let start = state.selected / span * span;
-            let rows = &edges[start.min(edges.len())..(start + span).min(edges.len())];
-            let row_h = ((height - 192) / span as i32).max(1);
-            let box_w = (width - 96) / 2;
-            for (i, edge) in rows.iter().enumerate() {
-                let y = 70 + i as i32 * row_h;
-                let chosen = start + i == state.selected;
-                let tint = if chosen {
-                    color(213, 240, 237)
-                } else {
-                    color(232, 239, 245)
+            if let Some(graph) = &state.graph {
+                let viewport = state.viewport;
+                let point = |x, y| {
+                    let (x, y) = viewport.project(x, y);
+                    (x + 20, y + 88)
                 };
-                let left = vis_rect(20, y, box_w, row_h - 8);
-                let right = vis_rect(width - 20 - box_w, y, box_w, row_h - 8);
-                fill(dc, &left, tint);
-                fill(dc, &right, tint);
-                let mid = y + (row_h - 8).max(0) / 2;
-                vis_line(
-                    dc,
-                    (left.right, mid),
-                    (right.left, mid),
-                    if chosen { teal } else { blue },
+                let (nw, nh) = (
+                    ni::graph::NODE_WIDTH * viewport.scale / 100,
+                    ni::graph::NODE_HEIGHT * viewport.scale / 100,
                 );
                 vis_text(
                     dc,
-                    vis_rect(left.left + 7, y, box_w - 14, 18),
-                    edge.left_kind,
-                    teal,
-                    false,
-                );
-                vis_text(
-                    dc,
-                    vis_rect(left.left + 7, y + 18, box_w - 14, row_h - 26),
-                    &edge.left,
+                    vis_rect(20, 56, width - 40, 25),
+                    &format!(
+                        "{} node · {} relasi · zoom {}% · ruang {} × {} · {}",
+                        graph.nodes.len(),
+                        graph.links.len(),
+                        viewport.scale,
+                        graph.width(),
+                        graph.height,
+                        if graph.limited || edges.len() == ni::visual::MAX_EDGES {
+                            "batas tampilan"
+                        } else {
+                            "snapshot terfilter"
+                        }
+                    ),
                     ink,
                     false,
                 );
-                vis_text(
-                    dc,
-                    vis_rect(right.left + 7, y, box_w - 14, 18),
-                    edge.right_kind,
-                    teal,
-                    false,
-                );
-                vis_text(
-                    dc,
-                    vis_rect(right.left + 7, y + 18, box_w - 14, row_h - 26),
-                    &edge.right,
-                    ink,
-                    false,
-                );
-            }
-            if let Some(edge) = edges.get(state.selected) {
-                let y = height - 115;
-                let detail = format!(
-                    "{} / {} · {}/{}\n{} · UTC {}\n{}\nBukan bukti kabel fisik.",
-                    edge.scope,
-                    edge.source,
-                    state.selected + 1,
-                    edges.len(),
-                    edge.left_kind,
-                    edge.utc,
-                    edge.details
-                );
-                vis_text(dc, vis_rect(20, y, width - 40, 100), &detail, ink, true);
+                let saved = unsafe { SaveDC(dc) };
+                if saved != 0 {
+                    unsafe {
+                        IntersectClipRect(dc, 8, 83, width - 8, height - 118);
+                    }
+                    for link in &graph.links {
+                        let a = &graph.nodes[link.from];
+                        let b = &graph.nodes[link.to];
+                        let p = point(a.x + ni::graph::NODE_WIDTH / 2, a.y + ni::graph::NODE_HEIGHT / 2);
+                        let q = point(b.x + ni::graph::NODE_WIDTH / 2, b.y + ni::graph::NODE_HEIGHT / 2);
+                        vis_line(dc, p, q, if link.evidence == state.selected { teal } else { color(156, 177, 195) });
+                    }
+                    for node in &graph.nodes {
+                        let (x, y) = point(node.x, node.y);
+                        if x + nw < 8 || x > width || y + nh < 83 || y > height - 118 {
+                            continue;
+                        }
+                        let chosen = node.incident.contains(&state.selected);
+                        fill(dc, &vis_rect(x, y, nw, nh), if chosen { color(213, 240, 237) } else { color(232, 239, 245) });
+                        vis_text(dc, vis_rect(x + 5, y, nw - 10, 17), node.kind, teal, false);
+                        vis_text(dc, vis_rect(x + 5, y + 17, nw - 10, 19), &node.name, ink, false);
+                        if nh >= 52 {
+                            vis_text(dc, vis_rect(x + 5, y + 36, nw - 10, 15), &node.authority, ink, false);
+                        }
+                    }
+                    unsafe { RestoreDC(dc, saved); }
+                }
+                if let Some(edge) = edges.get(state.selected) {
+                    let detail = format!(
+                        "{} → {} · {}/{}\n{} · {} · UTC {}\n{}\nRelasi logis; tidak membuktikan kabel fisik.",
+                        edge.left, edge.right, state.selected + 1, edges.len(),
+                        edge.scope, edge.source, edge.utc, edge.details
+                    );
+                    vis_text(dc, vis_rect(20, height - 112, width - 40, 104), &detail, ink, true);
+                }
             }
         }
         VisualData::Bandwidth(series) => {
@@ -207,6 +212,9 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                 .min(series.points.len());
             let points = series.range(end, state.span);
             let max = ni::visual::Series::max_value(points);
+            let summary = interface_trend::summarize(
+                &points.iter().cloned().collect::<std::collections::VecDeque<_>>(),
+            );
             let left = 75;
             let right = width - 24;
             let top = 112;
@@ -214,7 +222,12 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
             vis_text(
                 dc,
                 vis_rect(20, 85, width - 40, 20),
-                &format!("RX teal · TX biru · skala maksimum {max} bit/s"),
+                &format!(
+                    "RX teal · TX biru · max {max} · P95 RX {} / TX {} bps · {} gap",
+                    display_opt(summary.p95_rx),
+                    display_opt(summary.p95_tx),
+                    summary.gaps
+                ),
                 ink,
                 false,
             );
@@ -317,8 +330,16 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         (WM_KEYDOWN, 0x27 | 0x28) => state.step(1),
                         (WM_KEYDOWN, 0x21) => state.step(-(state.span as isize)),
                         (WM_KEYDOWN, 0x22) => state.step(state.span as isize),
-                        (WM_KEYDOWN, 0x24) => state.selected = 0,
+                        (WM_KEYDOWN, 0x24) => {
+                            state.selected = 0;
+                            state.viewport = ni::graph::Viewport::default();
+                        }
                         (WM_KEYDOWN, 0x23) => state.selected = state.len().saturating_sub(1),
+                        (WM_KEYDOWN, 0x57) => state.viewport.pan(0, 100),
+                        (WM_KEYDOWN, 0x53) => state.viewport.pan(0, -100),
+                        (WM_KEYDOWN, 0x41) => state.viewport.pan(100, 0),
+                        (WM_KEYDOWN, 0x44) => state.viewport.pan(-100, 0),
+                        (WM_KEYDOWN, 0x52) => state.viewport = ni::graph::Viewport::default(),
                         (WM_KEYDOWN, 0x6b | 0xbb) => state.zoom(true),
                         (WM_KEYDOWN, 0x6d | 0xbd) => state.zoom(false),
                         (WM_MOUSEWHEEL, _) => {
@@ -340,6 +361,39 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             0
         }
+        WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MOUSEMOVE | WM_CAPTURECHANGED => {
+            let x = (lp as u16) as i16 as i32;
+            let y = ((lp >> 16) as u16) as i16 as i32;
+            let mut repaint = false;
+            VISUAL_STATE.with(|slot| {
+                if let Some(state) = slot.borrow_mut().as_mut()
+                    && matches!(&state.data, VisualData::Graph(_))
+                {
+                    match msg {
+                        WM_RBUTTONDOWN => state.drag = Some((x, y)),
+                        WM_MOUSEMOVE => {
+                            if let Some((px, py)) = state.drag {
+                                state.viewport.pan(x - px, y - py);
+                                state.drag = Some((x, y));
+                                repaint = true;
+                            }
+                        }
+                        _ => state.drag = None,
+                    }
+                }
+            });
+            unsafe {
+                if msg == WM_RBUTTONDOWN {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(h);
+                } else if msg == WM_RBUTTONUP {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                }
+                if repaint {
+                    InvalidateRect(h, null(), 0);
+                }
+            }
+            0
+        }
         WM_LBUTTONDOWN => {
             let x = (lp as u16) as i16 as i32;
             let y = ((lp >> 16) as u16) as i16 as i32;
@@ -350,12 +404,16 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             VISUAL_STATE.with(|slot| {
                 if let Some(state) = slot.borrow_mut().as_mut() {
                     match &state.data {
-                        VisualData::Graph(_) if y >= 70 && y < client.bottom - 115 => {
-                            let row_h = ((client.bottom - 192) / state.span as i32).max(1);
-                            let row = ((y - 70) / row_h) as usize;
-                            if row < state.span {
-                                state.selected = (state.selected / state.span * state.span + row)
-                                    .min(state.len().saturating_sub(1));
+                        VisualData::Graph(_) if y >= 83 && y < client.bottom - 118 => {
+                            if let Some(graph) = &state.graph
+                                && let Some(id) = state.viewport.hit(graph, x - 20, y - 88)
+                            {
+                                let incident = &graph.nodes[id].incident;
+                                if let Some(edge) = incident.iter().find(|&&i| i > state.selected)
+                                    .or_else(|| incident.first())
+                                {
+                                    state.selected = *edge;
+                                }
                             }
                         }
                         VisualData::Bandwidth(series) if y >= 112 && y < client.bottom - 115 => {
@@ -410,7 +468,14 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
     if unsafe { RegisterClassW(&wc) } == 0 {
         return Err("Tidak dapat mendaftarkan penampil bukti.".into());
     }
+    let graph = match &data {
+        VisualData::Graph(edges) => Some(ni::graph::Graph::build(edges)),
+        VisualData::Bandwidth(_) => None,
+    };
     let mut state = VisualState {
+        graph,
+        viewport: ni::graph::Viewport::default(),
+        drag: None,
         span: if matches!(&data, VisualData::Graph(_)) {
             4
         } else {
@@ -453,14 +518,25 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
         }
         let mut smoke_error = false;
         if smoke {
-            let before = VISUAL_STATE.with(|slot| slot.borrow().as_ref().map(|s| s.span));
+            let before = VISUAL_STATE.with(|slot| {
+                slot.borrow().as_ref().map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
+            });
             unsafe {
                 SendMessageW(h, WM_KEYDOWN, 0x6b, 0);
                 SendMessageW(h, WM_KEYDOWN, 0x25, 0);
+                SendMessageW(h, WM_KEYDOWN, 0x44, 0);
                 UpdateWindow(h);
             }
-            let after = VISUAL_STATE.with(|slot| slot.borrow().as_ref().map(|s| s.span));
-            smoke_error = before == after || after.is_none();
+            let after = VISUAL_STATE.with(|slot| {
+                slot.borrow().as_ref().map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
+            });
+            smoke_error = match (before, after) {
+                (Some((span, scale, pan)), Some((new_span, new_scale, new_pan))) => {
+                    span == new_span
+                        || (scale != new_scale && pan == new_pan)
+                }
+                _ => true,
+            };
             unsafe {
                 PostMessageW(h, WM_CLOSE, 0, 0);
             }

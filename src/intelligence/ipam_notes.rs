@@ -206,6 +206,69 @@ fn append(conn: &Connection, note: &Note, expected: i64, now: u64) -> Result<()>
     }
     Ok(())
 }
+/// No identifiers, CIDRs, free text or timestamps are exported.
+pub fn export_summary(path: &Path, dest: &Path) -> Result<()> {
+    use std::io::Write;
+    if !path.try_exists().map_err(error)? {
+        return Err("Database IPAM belum tersedia.".into());
+    }
+    let rows = page(path)?;
+    let active = rows.iter().filter(|r| r.active).count();
+    let reserved = rows.iter().filter(|r| r.active && r.reserved).count();
+    let report = serde_json::json!({
+        "schema": 1,
+        "basis": "operator metadata only; not observed assignments",
+        "total_keys": rows.len(),
+        "active_labels": active - reserved,
+        "active_reservations": reserved,
+        "inactive_keys": rows.len() - active,
+    });
+    let stage = super::archive_ops::Stage::new(dest)?;
+    let mut file = std::fs::OpenOptions::new().create_new(true).write(true)
+        .open(&stage.file).map_err(error)?;
+    serde_json::to_writer_pretty(&mut file, &report).map_err(error)?;
+    file.write_all(b"\n").map_err(error)?;
+    file.sync_all().map_err(error)?;
+    drop(file);
+    stage.publish(dest)
+}
+
+pub fn backup(path: &Path, dest: &Path) -> Result<()> {
+    use rusqlite::backup::{Backup, StepResult};
+    use std::{fs::OpenOptions, time::Instant};
+    let source = open(path, false)?;
+    let stage = super::archive_ops::Stage::new(dest)?;
+    drop(OpenOptions::new().create_new(true).write(true).open(&stage.file).map_err(error)?);
+    let mut output = Connection::open_with_flags(&stage.file, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(error)?;
+    {
+        let copy = Backup::new(&source, &mut output).map_err(error)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() >= deadline {
+                return Err("Batas waktu backup IPAM tercapai.".into());
+            }
+            match copy.step(128).map_err(error)? {
+                StepResult::Done => break,
+                StepResult::More => std::thread::yield_now(),
+                _ => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+    let mode: String = output.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0)).map_err(error)?;
+    if !mode.eq_ignore_ascii_case("delete") {
+        return Err("Backup IPAM tidak mandiri.".into());
+    }
+    verify(&output)?;
+    let integrity: String = output.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(error)?;
+    if integrity != "ok" {
+        return Err("Pemeriksaan integritas backup IPAM gagal.".into());
+    }
+    drop(output);
+    OpenOptions::new().write(true).open(&stage.file).and_then(|f| f.sync_all()).map_err(error)?;
+    stage.publish(dest)
+}
+
 pub fn save(path: &Path, note: &Note, expected: i64, now: u64) -> Result<()> {
     let mut conn = open(path, true)?;
     let tx = conn
@@ -298,6 +361,17 @@ mod tests {
         assert_eq!(restored[0].alias, "first");
         undo(&path, &restored[1], 15).unwrap();
         assert!(!page(&path).unwrap()[1].active);
+        let backup_path = dir.join("backup.sqlite3");
+        backup(&path, &backup_path).unwrap();
+        assert_eq!(page(&backup_path).unwrap(), page(&path).unwrap());
+        assert!(backup(&path, &backup_path).is_err());
+        let summary = dir.join("summary.json");
+        export_summary(&path, &summary).unwrap();
+        let text = std::fs::read_to_string(&summary).unwrap();
+        for private in ["192.0.2", "blue", "first", "note\""] {
+            assert!(!text.contains(private));
+        }
+        assert!(export_summary(&path, &summary).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

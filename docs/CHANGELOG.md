@@ -1,3 +1,13 @@
+# Graph and history development candidate — Windows acceptance pending
+
+- Baseline a11ea99f: 11/11 CI gates, 83 Rust tests, native smoke and installer packaging passed; verified hashes.
+- Add shared-node topology with conservative scope identity, native pan and zoom, direct dashboard chart drilldown and selected-window P95, source-stamped resource metrics.
+- Add DHCPv6 server/interface mapping and separate immutable history SQLite with no DUID; add 7 passing offline SQL tests and independent CI gate.
+- Add IPAM aggregate redacted export and no-overwrite SQLite backup, bounded offline Syslog header summary, new native fixture smoke and light-mode refinements.
+- New source not compiled or run on Windows yet. No version bump, schema change to legacy archive, dependency changes or auto workflow.
+
+---
+
 # CI format recovery — acceptance pending
 
 - Applied 45 rustfmt diff hunks from run 45663046203 across five Rust files.

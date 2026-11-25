@@ -1,3 +1,20 @@
+# Latest evidence status — graph/history batch
+
+| Capability | Baseline a11ea99f | New candidate |
+|---|---|---|
+| Windows build / native fixture / installer | PASS (run 45667059429) | NOT TESTED |
+| Graph shared nodes + pan/zoom | Prior relation viewer PASS | Source + Rust/smoke fixtures, NOT TESTED |
+| RX/TX selected range P95 + dashboard direct chart | Prior viewer PASS | Source, NOT TESTED |
+| IPAM metadata / undo | Baseline PASS | Backup/export source, NOT TESTED |
+| DHCPv6 / PD | Prior binding parser tests PASS | Explicit mapping/history SQL 7/7; Rust/UI NOT TESTED |
+| Syslog offline | Not implemented | Header-only source, NOT TESTED |
+| SNMPv3 authPriv / authenticated live syslog | Not tested | Deferred |
+| Hardware, UAC, DPI, upgrade/uninstall, benchmark | NOT TESTED | NOT TESTED |
+
+See WENET_GRAPH_HISTORY_BATCH.md for exact evidence. Do not conflate source with tested binary.
+
+---
+
 # Capability Matrix — WeNet Toolkit (kandidat 1.3.0-rc.1)
 
 | Area | Status | Batas bukti |

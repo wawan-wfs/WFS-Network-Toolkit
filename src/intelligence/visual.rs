@@ -12,11 +12,18 @@ pub struct Edge {
     pub left_kind: &'static str,
     pub right_kind: &'static str,
     pub scope: String,
+    pub authority: Option<String>,
     pub source: &'static str,
     pub utc: u64,
     pub details: String,
 }
 impl Edge {
+    pub fn scoped(authority: &str, row: &Observation) -> Self {
+        let mut edge = Self::from_observation(row);
+        edge.authority = Some(authority.to_owned());
+        edge
+    }
+
     pub fn from_observation(row: &Observation) -> Self {
         let (left_kind, right_kind) = match row.source {
             s if s == Table::BridgePorts.name() => ("Bridge", "Interface"),
@@ -37,6 +44,7 @@ impl Edge {
             left_kind,
             right_kind,
             scope: row.scope.clone(),
+            authority: None,
             source: row.source,
             utc: row.observed_at,
             details: row.details.clone(),

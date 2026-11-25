@@ -342,6 +342,27 @@ impl<'a> Scoped<'a> {
         )
     }
 }
+/// Explicit unique members only; no expansion of wildcard/alias interfaces.
+pub fn explicit_vrfs(s: &RouterSnapshot) -> BTreeMap<String, Option<String>> {
+    let mut result = BTreeMap::new();
+    for row in &s.network.0 {
+        if row.table != Table::Vrf || row.disabled {
+            continue;
+        }
+        for member in row
+            .value
+            .split(',')
+            .filter(|p| !p.is_empty() && *p != "all" && !p.starts_with('!'))
+        {
+            result
+                .entry(member.to_owned())
+                .and_modify(|v| *v = None)
+                .or_insert_with(|| Some(row.subject.clone()));
+        }
+    }
+    result
+}
+
 fn table_basis(table: Table) -> &'static str {
     match table {
         Table::BridgeHost => "MAC teramati",
