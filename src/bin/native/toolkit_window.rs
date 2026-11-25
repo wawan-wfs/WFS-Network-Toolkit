@@ -2301,9 +2301,8 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         }
         smoke_trace("IPAM metadata fixture, editor and undo");
         let notes_path = ui.notes_path()?;
-        let draft = ni::ipam_notes::Note::parse(
-            "lab/blue|192.0.2.0/24|reserved|Fixture|tag|offline",
-        )?;
+        let draft =
+            ni::ipam_notes::Note::parse("lab/blue|192.0.2.0/24|reserved|Fixture|tag|offline")?;
         ni::ipam_notes::save(&notes_path, &draft, 0, ni::now())?;
         select(ui.h(INTEL_MODE), NOTES_MODE);
         ui.action(INTEL_MODE, CBN_SELCHANGE as u16)?;
@@ -2327,7 +2326,12 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         ni::ipam_notes::undo(&notes_path, &saved, ni::now())?;
         ui.action(INTEL_RESET_FILTER, 0)?;
         finish(ui)?;
-        if ui.intel.visible_notes.first().is_none_or(|note| note.active || note.revision != 2) {
+        if ui
+            .intel
+            .visible_notes
+            .first()
+            .is_none_or(|note| note.active || note.revision != 2)
+        {
             return Err("Undo metadata tidak tampil sebagai revisi nonaktif.".into());
         }
         Ok(())
@@ -2388,7 +2392,12 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
     if ui.intel.visual_edges.len() != 2 {
         return Err("Graf tidak cocok dengan relasi fixture.".into());
     }
-    show_visual_inner(ui.hwnd, VisualData::Graph(ui.intel.visual_edges.clone()), 0, true)?;
+    show_visual_inner(
+        ui.hwnd,
+        VisualData::Graph(ui.intel.visual_edges.clone()),
+        0,
+        true,
+    )?;
     let samples = std::collections::VecDeque::from([
         ni::interface_trend::Point {
             utc: 100,

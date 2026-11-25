@@ -27,10 +27,18 @@ impl VisualState {
     fn zoom(&mut self, more: bool) {
         self.span = match &self.data {
             VisualData::Graph(_) => {
-                if more { self.span.saturating_sub(1).max(2) } else { (self.span + 1).min(8) }
+                if more {
+                    self.span.saturating_sub(1).max(2)
+                } else {
+                    (self.span + 1).min(8)
+                }
             }
             VisualData::Bandwidth(_) => {
-                if more { (self.span / 2).max(15) } else { (self.span * 2).min(120) }
+                if more {
+                    (self.span / 2).max(15)
+                } else {
+                    (self.span * 2).min(120)
+                }
             }
         };
     }
@@ -50,9 +58,12 @@ fn vis_text(dc: HDC, rect: RECT, text: &str, tint: u32, wrap: bool) {
             text.as_ptr(),
             -1,
             &mut rect,
-            DT_NOPREFIX | if wrap { DT_WORDBREAK | DT_END_ELLIPSIS } else {
-                DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS
-            },
+            DT_NOPREFIX
+                | if wrap {
+                    DT_WORDBREAK | DT_END_ELLIPSIS
+                } else {
+                    DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS
+                },
         );
     }
 }
@@ -99,7 +110,13 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
         VisualData::Graph(_) => "Topologi — graf bukti logis",
         VisualData::Bandwidth(_) => "Bandwidth — histori interface",
     };
-    vis_text(dc, vis_rect(18, 4, width - 36, 26), title, color(255, 255, 255), false);
+    vis_text(
+        dc,
+        vis_rect(18, 4, width - 36, 26),
+        title,
+        color(255, 255, 255),
+        false,
+    );
     vis_text(
         dc,
         vis_rect(18, 30, width - 36, 18),
@@ -117,48 +134,106 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
             for (i, edge) in rows.iter().enumerate() {
                 let y = 70 + i as i32 * row_h;
                 let chosen = start + i == state.selected;
-                let tint = if chosen { color(213, 240, 237) } else { color(232, 239, 245) };
+                let tint = if chosen {
+                    color(213, 240, 237)
+                } else {
+                    color(232, 239, 245)
+                };
                 let left = vis_rect(20, y, box_w, row_h - 8);
                 let right = vis_rect(width - 20 - box_w, y, box_w, row_h - 8);
                 fill(dc, &left, tint);
                 fill(dc, &right, tint);
                 let mid = y + (row_h - 8).max(0) / 2;
-                vis_line(dc, (left.right, mid), (right.left, mid), if chosen { teal } else { blue });
-                vis_text(dc, vis_rect(left.left + 7, y, box_w - 14, 18), edge.left_kind, teal, false);
-                vis_text(dc, vis_rect(left.left + 7, y + 18, box_w - 14, row_h - 26), &edge.left, ink, false);
-                vis_text(dc, vis_rect(right.left + 7, y, box_w - 14, 18), edge.right_kind, teal, false);
-                vis_text(dc, vis_rect(right.left + 7, y + 18, box_w - 14, row_h - 26), &edge.right, ink, false);
+                vis_line(
+                    dc,
+                    (left.right, mid),
+                    (right.left, mid),
+                    if chosen { teal } else { blue },
+                );
+                vis_text(
+                    dc,
+                    vis_rect(left.left + 7, y, box_w - 14, 18),
+                    edge.left_kind,
+                    teal,
+                    false,
+                );
+                vis_text(
+                    dc,
+                    vis_rect(left.left + 7, y + 18, box_w - 14, row_h - 26),
+                    &edge.left,
+                    ink,
+                    false,
+                );
+                vis_text(
+                    dc,
+                    vis_rect(right.left + 7, y, box_w - 14, 18),
+                    edge.right_kind,
+                    teal,
+                    false,
+                );
+                vis_text(
+                    dc,
+                    vis_rect(right.left + 7, y + 18, box_w - 14, row_h - 26),
+                    &edge.right,
+                    ink,
+                    false,
+                );
             }
             if let Some(edge) = edges.get(state.selected) {
                 let y = height - 115;
                 let detail = format!(
                     "{} / {} · {}/{}\n{} · UTC {}\n{}\nBukan bukti kabel fisik.",
-                    edge.scope, edge.source, state.selected + 1, edges.len(), edge.left_kind, edge.utc, edge.details
+                    edge.scope,
+                    edge.source,
+                    state.selected + 1,
+                    edges.len(),
+                    edge.left_kind,
+                    edge.utc,
+                    edge.details
                 );
                 vis_text(dc, vis_rect(20, y, width - 40, 100), &detail, ink, true);
             }
         }
         VisualData::Bandwidth(series) => {
-            vis_text(dc, vis_rect(20, 58, width - 40, 22), &series.label, ink, false);
-            let end = (state.selected + 1).max(state.span).min(series.points.len());
+            vis_text(
+                dc,
+                vis_rect(20, 58, width - 40, 22),
+                &series.label,
+                ink,
+                false,
+            );
+            let end = (state.selected + 1)
+                .max(state.span)
+                .min(series.points.len());
             let points = series.range(end, state.span);
             let max = ni::visual::Series::max_value(points);
             let left = 75;
             let right = width - 24;
             let top = 112;
             let bottom = height - 115;
-            vis_text(dc, vis_rect(20, 85, width - 40, 20), &format!("RX teal · TX biru · skala maksimum {max} bit/s"), ink, false);
+            vis_text(
+                dc,
+                vis_rect(20, 85, width - 40, 20),
+                &format!("RX teal · TX biru · skala maksimum {max} bit/s"),
+                ink,
+                false,
+            );
             vis_line(dc, (left, top), (left, bottom), ink);
             vis_line(dc, (left, bottom), (right, bottom), ink);
             let t0 = points.first().map_or(0, |p| p.utc);
             let dt = points.last().map_or(0, |p| p.utc).saturating_sub(t0).max(1);
-            let x = |utc: u64| left + ni::visual::Series::axis(utc.saturating_sub(t0), dt, right - left);
+            let x = |utc: u64| {
+                left + ni::visual::Series::axis(utc.saturating_sub(t0), dt, right - left)
+            };
             for (rx, tint) in [(true, teal), (false, blue)] {
                 let mut prior = None;
                 for p in points {
                     let value = if rx { p.rx_bps } else { p.tx_bps };
                     if let Some(value) = value {
-                        let at = (x(p.utc), bottom - ni::visual::Series::axis(value, max, bottom - top));
+                        let at = (
+                            x(p.utc),
+                            bottom - ni::visual::Series::axis(value, max, bottom - top),
+                        );
                         if let Some(prev) = prior {
                             vis_line(dc, prev, at, tint);
                         }
@@ -174,14 +249,31 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                 vis_line(dc, (cursor, top), (cursor, bottom), color(160, 173, 184));
                 let detail = format!(
                     "Sampel {}/{} · UTC {} · interval {} detik\nRX {} bit/s · TX {} bit/s\nRentang {}–{} UTC. Data hilang/reset = gap, bukan nol.",
-                    state.selected + 1, series.points.len(), point.utc, display_opt(point.interval_s),
-                    display_opt(point.rx_bps), display_opt(point.tx_bps),
-                    points.first().map_or(0, |p| p.utc), points.last().map_or(0, |p| p.utc)
+                    state.selected + 1,
+                    series.points.len(),
+                    point.utc,
+                    display_opt(point.interval_s),
+                    display_opt(point.rx_bps),
+                    display_opt(point.tx_bps),
+                    points.first().map_or(0, |p| p.utc),
+                    points.last().map_or(0, |p| p.utc)
                 );
-                vis_text(dc, vis_rect(20, height - 96, width - 40, 80), &detail, ink, true);
+                vis_text(
+                    dc,
+                    vis_rect(20, height - 96, width - 40, 80),
+                    &detail,
+                    ink,
+                    true,
+                );
             }
             if points.is_empty() {
-                vis_text(dc, vis_rect(20, 112, width - 40, 32), "Tidak ada sampel.", ink, false);
+                vis_text(
+                    dc,
+                    vis_rect(20, 112, width - 40, 32),
+                    "Tidak ada sampel.",
+                    ink,
+                    false,
+                );
             }
         }
     }
@@ -199,17 +291,23 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     }
                 });
             }
-            unsafe { EndPaint(h, &paint); }
+            unsafe {
+                EndPaint(h, &paint);
+            }
             0
         }
         WM_ERASEBKGND => 1,
         WM_CLOSE => {
-            unsafe { DestroyWindow(h); }
+            unsafe {
+                DestroyWindow(h);
+            }
             0
         }
         WM_KEYDOWN | WM_MOUSEWHEEL => {
             if msg == WM_KEYDOWN && wp == 0x1b {
-                unsafe { DestroyWindow(h); }
+                unsafe {
+                    DestroyWindow(h);
+                }
                 return 0;
             }
             VISUAL_STATE.with(|slot| {
@@ -231,18 +329,24 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     }
                 }
             });
-            unsafe { InvalidateRect(h, null(), 0); }
+            unsafe {
+                InvalidateRect(h, null(), 0);
+            }
             0
         }
         WM_SIZE => {
-            unsafe { InvalidateRect(h, null(), 0); }
+            unsafe {
+                InvalidateRect(h, null(), 0);
+            }
             0
         }
         WM_LBUTTONDOWN => {
             let x = (lp as u16) as i16 as i32;
             let y = ((lp >> 16) as u16) as i16 as i32;
             let mut client = RECT::default();
-            unsafe { GetClientRect(h, &mut client); }
+            unsafe {
+                GetClientRect(h, &mut client);
+            }
             VISUAL_STATE.with(|slot| {
                 if let Some(state) = slot.borrow_mut().as_mut() {
                     match &state.data {
@@ -255,17 +359,24 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                             }
                         }
                         VisualData::Bandwidth(series) if y >= 112 && y < client.bottom - 115 => {
-                            let end = (state.selected + 1).max(state.span).min(series.points.len());
+                            let end = (state.selected + 1)
+                                .max(state.span)
+                                .min(series.points.len());
                             let points = series.range(end, state.span);
                             let t0 = points.first().map_or(0, |p| p.utc);
                             let dt = points.last().map_or(0, |p| p.utc).saturating_sub(t0).max(1);
                             let width = (client.right - 99).max(1);
-                            if let Some((index, _)) = points.iter().enumerate().min_by_key(|(_, p)| {
-                                let px = 75 + ni::visual::Series::axis(
-                                    p.utc.saturating_sub(t0), dt, width
-                                );
-                                px.abs_diff(x)
-                            }) {
+                            if let Some((index, _)) =
+                                points.iter().enumerate().min_by_key(|(_, p)| {
+                                    let px = 75
+                                        + ni::visual::Series::axis(
+                                            p.utc.saturating_sub(t0),
+                                            dt,
+                                            width,
+                                        );
+                                    px.abs_diff(x)
+                                })
+                            {
                                 state.selected = end - points.len() + index;
                             }
                         }
@@ -273,7 +384,9 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     }
                 }
             });
-            unsafe { InvalidateRect(h, null(), 0); }
+            unsafe {
+                InvalidateRect(h, null(), 0);
+            }
             0
         }
         _ => unsafe { DefWindowProcW(h, msg, wp, lp) },
@@ -298,7 +411,11 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
         return Err("Tidak dapat mendaftarkan penampil bukti.".into());
     }
     let mut state = VisualState {
-        span: if matches!(&data, VisualData::Graph(_)) { 4 } else { 60 },
+        span: if matches!(&data, VisualData::Graph(_)) {
+            4
+        } else {
+            60
+        },
         data,
         selected,
     };
@@ -358,7 +475,9 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
             let status = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
             if status <= 0 {
                 if status == 0 {
-                    unsafe { PostQuitMessage(message.wParam as i32); }
+                    unsafe {
+                        PostQuitMessage(message.wParam as i32);
+                    }
                 } else {
                     result = Err("Loop pesan penampil gagal.".into());
                 }
@@ -384,6 +503,8 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
         result
     };
     VISUAL_STATE.with(|slot| *slot.borrow_mut() = None);
-    unsafe { UnregisterClassW(class.as_ptr(), instance); }
+    unsafe {
+        UnregisterClassW(class.as_ptr(), instance);
+    }
     result
 }

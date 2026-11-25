@@ -854,7 +854,9 @@ impl Native {
         })
     }
     fn notes_path(&self) -> Result<PathBuf> {
-        Ok(self.primary_archive_path()?.with_file_name("ipam-notes-v1.sqlite3"))
+        Ok(self
+            .primary_archive_path()?
+            .with_file_name("ipam-notes-v1.sqlite3"))
     }
     fn load_notes(&mut self) -> Result<()> {
         let path = self.notes_path()?;
@@ -871,8 +873,10 @@ impl Native {
             return Err("Kembali ke arsip utama sebelum mengedit metadata lokal.".into());
         }
         let path = self.notes_path()?;
-        let selected = self.selected_intel_row()
-            .and_then(|i| self.intel.visible_notes.get(i)).cloned();
+        let selected = self
+            .selected_intel_row()
+            .and_then(|i| self.intel.visible_notes.get(i))
+            .cloned();
         let (draft, expected) = if undo {
             let note = selected.ok_or("Pilih revisi untuk undo.")?;
             let expected = note.revision;
@@ -880,8 +884,13 @@ impl Native {
         } else {
             let draft = ni::ipam_notes::Note::parse(&get(self.h(INTEL_FILTER)))?;
             let expected = if let Some(note) = selected {
-                if (note.scope.as_str(), note.cidr.as_str()) != (draft.scope.as_str(), draft.cidr.as_str()) {
-                    return Err("Key berbeda dari baris terpilih. Reset daftar sebelum membuat key baru.".into());
+                if (note.scope.as_str(), note.cidr.as_str())
+                    != (draft.scope.as_str(), draft.cidr.as_str())
+                {
+                    return Err(
+                        "Key berbeda dari baris terpilih. Reset daftar sebelum membuat key baru."
+                            .into(),
+                    );
                 }
                 note.revision
             } else {
@@ -894,10 +903,13 @@ impl Native {
             &format!(
                 "{} metadata lokal untuk {} / {} (revisi {})? Tidak ada perubahan jaringan atau reservasi router.",
                 if undo { "Undo" } else { "Simpan" },
-                draft.scope, draft.cidr, expected
+                draft.scope,
+                draft.cidr,
+                expected
             ),
             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-        ) == IDYES {
+        ) == IDYES
+        {
             self.start_intel(move || {
                 if undo {
                     ni::ipam_notes::undo(&path, &draft, ni::now())?;
@@ -1370,7 +1382,11 @@ impl Native {
                     .selected_intel_row()
                     .ok_or("Pilih satu baris terlebih dahulu.")?;
                 if mode == NOTES_MODE {
-                    let note = self.intel.visible_notes.get(index).ok_or("Pilih metadata.")?;
+                    let note = self
+                        .intel
+                        .visible_notes
+                        .get(index)
+                        .ok_or("Pilih metadata.")?;
                     set(self.h(INTEL_FILTER), &note.editor());
                     return Ok(());
                 }
@@ -2033,19 +2049,30 @@ impl Native {
                     }
                     push(
                         [note.cidr.clone(), note.scope.clone(), state.into(), summary],
-                        &|| format!(
-                            "{} / {}\nAlias {} · tag {}\nCatatan: {}\nRevisi {} · UTC {}\nMetadata manual; tidak membuktikan assignment atau mengubah router. Histori tidak ditimpa.",
-                            note.scope, note.cidr, note.alias, note.tags, note.note, note.revision, note.recorded
-                        ),
+                        &|| {
+                            format!(
+                                "{} / {}\nAlias {} · tag {}\nCatatan: {}\nRevisi {} · UTC {}\nMetadata manual; tidak membuktikan assignment atau mengubah router. Histori tidak ditimpa.",
+                                note.scope,
+                                note.cidr,
+                                note.alias,
+                                note.tags,
+                                note.note,
+                                note.revision,
+                                note.recorded
+                            )
+                        },
                     );
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Pilih Isi editor untuk revisi; Simpan atau Undo. Reset sebelum membuat key baru. Backup DB metadata terpisah."
             }
             DHCP6_MODE => {
                 for (router, snapshot) in &self.intel.routers {
-                    if let Some(c) = snapshot.coverage.iter().rev().find(|c| {
-                        c.source == ni::router::Table::Dhcp6Binding.name()
-                    }) {
+                    if let Some(c) = snapshot
+                        .coverage
+                        .iter()
+                        .rev()
+                        .find(|c| c.source == ni::router::Table::Dhcp6Binding.name())
+                    {
                         push(
                             [
                                 router.clone(),

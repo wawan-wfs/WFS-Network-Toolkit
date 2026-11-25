@@ -1,3 +1,11 @@
+# CI format recovery — acceptance pending
+
+- Applied 45 rustfmt diff hunks from run 45663046203 across five Rust files.
+- Previous candidate passed 83 Rust tests, Clippy, release build and IPAM SQL; three format gates failed; native smoke and installer skipped.
+- No version bump or intended behavior change. New exact SHA requires manual CI.
+
+---
+
 - Offline IPAM SQL contract: 7/7 passed on five exact matching inputs; Windows fixture smoke for visual viewers and metadata added, pending execution.
 
 - Added separate IPAM operator metadata ledger with immutable revisions, optimistic conflicts and undo; native editor controls and SQL contract tests.

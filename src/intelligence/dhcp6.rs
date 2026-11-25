@@ -68,14 +68,24 @@ mod tests {
         assert_eq!(a.kind(), "Alamat DHCPv6");
         assert_eq!(a.state(), "Bound teramati");
         assert!(!serde_json::to_string(&a).unwrap().contains("private"));
-        let p = Binding::parse(&json!({"address":"2001:db8:1::/64","server":"red","status":"bound"}), 41).unwrap();
+        let p = Binding::parse(
+            &json!({"address":"2001:db8:1::/64","server":"red","status":"bound"}),
+            41,
+        )
+        .unwrap();
         assert_eq!(p.kind(), "Prefix DHCPv6 / PD");
         assert_eq!(p.state(), "Bound; flag nonaktif tidak diketahui");
     }
 
     #[test]
     fn rejects_bad_prefix_and_missing_server() {
-        for raw in ["192.0.2.1", "ff02::1", "2001:db8::1/64", "::/0", "2001:db8::/129"] {
+        for raw in [
+            "192.0.2.1",
+            "ff02::1",
+            "2001:db8::1/64",
+            "::/0",
+            "2001:db8::/129",
+        ] {
             assert!(Binding::parse(&json!({"address":raw,"server":"lab"}), 1).is_none());
         }
         assert!(Binding::parse(&json!({"address":"2001:db8::1"}), 1).is_none());

@@ -1,3 +1,9 @@
+# Latest checkpoint — CI formatting recovery
+
+Read CI_FORMAT_RECOVERY_45663046203.md. Run 45663046203 on ad3077ce passed 8/11 gates (83 Rust tests, 7 IPAM SQL tests, Clippy, release build); failed three format gates. All 45 rustfmt hunks from the artifact have been applied. Run Windows workflow_dispatch on current main; check all 11 gates and CLI, native smoke (especially graph/chart/IPAM editor and undo), NSIS, checksums. Fix only actual remaining errors, without bypassing checks. Do not claim installer/screenshot before evidence. After acceptance, continue the complete P1 development below, including shared-node graph, integrated dashboard, IPAM scope mapping and backup, DHCPv6 history, monitoring, secure SNMPv3/Syslog, performance and UI/UX. Preserve compatibility, branding, single-window Admin and manual-only Actions. No artificial version bump.
+
+---
+
 # Latest acceptance checkpoint
 
 P1 source includes native evidence relation viewer, chart, DHCPv6 inventory and IPAM metadata ledger. Offline SQL 7/7 passed (docs/evidence/IPAM_SQL_20261125.md). New native smoke opens/paints/navigates/closes the viewers and exercises metadata fixture/editor/undo. Not yet run. Prior baseline c570b86a accepted, new candidate requires manual CI; do not present old package as latest candidate. Review formatting diffs, actual Rust/Windows errors and all 11 gates. Continue remaining P1 after successful acceptance; preserve manual triggers.

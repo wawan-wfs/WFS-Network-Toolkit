@@ -28,7 +28,9 @@ fn error(e: impl std::fmt::Display) -> String {
 fn valid_text(s: &str, max: usize) -> bool {
     s.len() <= max
         && !s.contains('|')
-        && !s.chars().any(|c| c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        && !s.chars().any(|c| {
+            c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
 }
 fn cidr(raw: &str) -> Option<String> {
     let (ip, bits) = raw.split_once('/')?;
@@ -105,8 +107,12 @@ fn read_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     })
 }
 fn verify(conn: &Connection) -> Result<()> {
-    let id: i64 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).map_err(error)?;
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(error)?;
+    let id: i64 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .map_err(error)?;
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(error)?;
     if id != APP_ID || version != 1 {
         return Err("Bukan database metadata IPAM WeNet yang kompatibel.".into());
     }
@@ -122,13 +128,27 @@ fn open(path: &Path, write: bool) -> Result<Connection> {
         std::fs::create_dir_all(path.parent().ok_or("Path IPAM tidak valid.")?).map_err(error)?;
     }
     let mut conn = Connection::open_with_flags(path, flags).map_err(error)?;
-    conn.busy_timeout(Duration::from_millis(1500)).map_err(error)?;
-    conn.execute_batch("PRAGMA trusted_schema=OFF;").map_err(error)?;
+    conn.busy_timeout(Duration::from_millis(1500))
+        .map_err(error)?;
+    conn.execute_batch("PRAGMA trusted_schema=OFF;")
+        .map_err(error)?;
     if write {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
-        let id: i64 = tx.pragma_query_value(None, "application_id", |r| r.get(0)).map_err(error)?;
-        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(error)?;
-        let count: i64 = tx.query_row("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'", [], |r| r.get(0)).map_err(error)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(error)?;
+        let id: i64 = tx
+            .pragma_query_value(None, "application_id", |r| r.get(0))
+            .map_err(error)?;
+        let version: i64 = tx
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(error)?;
+        let count: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(error)?;
         if id == 0 && version == 0 && count == 0 {
             tx.execute_batch(SCHEMA).map_err(error)?;
         }
@@ -147,7 +167,9 @@ pub fn page(path: &Path) -> Result<Vec<Note>> {
     let conn = open(path, false)?;
     let mut stmt = conn.prepare(CURRENT).map_err(error)?;
     let rows = stmt.query_map([], read_row).map_err(error)?;
-    let rows = rows.collect::<std::result::Result<Vec<_>, _>>().map_err(error)?;
+    let rows = rows
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(error)?;
     for row in &rows {
         row.validate()?;
     }
@@ -160,29 +182,55 @@ fn append(conn: &Connection, note: &Note, expected: i64, now: u64) -> Result<()>
         return Err("Revisi tidak valid.".into());
     }
     let now = now.min(i64::MAX as u64) as i64;
-    let changed = conn.execute(APPEND, params![
-        note.scope, note.cidr, expected, now, note.active, note.reserved,
-        note.alias, note.tags, note.note
-    ]).map_err(error)?;
+    let changed = conn
+        .execute(
+            APPEND,
+            params![
+                note.scope,
+                note.cidr,
+                expected,
+                now,
+                note.active,
+                note.reserved,
+                note.alias,
+                note.tags,
+                note.note
+            ],
+        )
+        .map_err(error)?;
     if changed != 1 {
-        return Err("Konflik revisi atau kapasitas metadata penuh. Muat ulang; tidak ada histori ditimpa.".into());
+        return Err(
+            "Konflik revisi atau kapasitas metadata penuh. Muat ulang; tidak ada histori ditimpa."
+                .into(),
+        );
     }
     Ok(())
 }
 pub fn save(path: &Path, note: &Note, expected: i64, now: u64) -> Result<()> {
     let mut conn = open(path, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(error)?;
     append(&tx, note, expected, now)?;
     tx.commit().map_err(error)
 }
 
 pub fn undo(path: &Path, current: &Note, now: u64) -> Result<()> {
     let mut conn = open(path, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(error)?;
     if current.revision < 1 {
         return Err("Tidak ada revisi untuk undo.".into());
     }
-    let stored = tx.query_row(EXACT, params![current.scope, current.cidr, current.revision], read_row).optional().map_err(error)?;
+    let stored = tx
+        .query_row(
+            EXACT,
+            params![current.scope, current.cidr, current.revision],
+            read_row,
+        )
+        .optional()
+        .map_err(error)?;
     if stored.as_ref() != Some(current) {
         return Err("Identitas revisi berubah; muat ulang.".into());
     }
@@ -195,7 +243,12 @@ pub fn undo(path: &Path, current: &Note, now: u64) -> Result<()> {
         tombstone.note.clear();
         tombstone
     } else {
-        tx.query_row(EXACT, params![current.scope, current.cidr, current.revision - 1], read_row).map_err(error)?
+        tx.query_row(
+            EXACT,
+            params![current.scope, current.cidr, current.revision - 1],
+            read_row,
+        )
+        .map_err(error)?
     };
     append(&tx, &previous, current.revision, now)?;
     tx.commit().map_err(error)
@@ -219,7 +272,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "wenet-ipam-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("notes.sqlite3");
