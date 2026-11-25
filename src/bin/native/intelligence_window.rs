@@ -1723,12 +1723,18 @@ impl Native {
                         [
                             "MikroTik".into(),
                             key.clone(),
-                            format!("{} lengkap / {} parsial / {} gagal", c.complete, c.partial, c.unavailable),
+                            format!(
+                                "{} lengkap / {} parsial / {} gagal",
+                                c.complete, c.partial, c.unavailable
+                            ),
                             format!("{} observasi IP · UTC {}", s.inventory.len(), s.observed_at),
                         ],
                         format!(
                             "{} interface, {} koneksi, {} sumber historis/ambigu. Polling: {:?}. Tidak menyatakan router online dari snapshot.",
-                            s.interfaces.len(), s.connections.len(), c.stale, poll.and_then(|p| p.outcome)
+                            s.interfaces.len(),
+                            s.connections.len(),
+                            c.stale,
+                            poll.and_then(|p| p.outcome)
                         ),
                         5,
                     );
@@ -1740,12 +1746,18 @@ impl Native {
                                     [
                                         "Bandwidth interface".into(),
                                         format!("{key} / {name}"),
-                                        format!("RX {} bps · TX {} bps", display_opt(last.rx_bps), display_opt(last.tx_bps)),
+                                        format!(
+                                            "RX {} bps · TX {} bps",
+                                            display_opt(last.rx_bps),
+                                            display_opt(last.tx_bps),
+                                        ),
                                         format!("UTC {} · {} gap", last.utc, summary.gaps),
                                     ],
                                     format!(
                                         "P95 RX {} bps · TX {} bps. {} interval valid. Gap tidak dihitung nol; tidak menjumlahkan interface yang mungkin membawa trafik sama.",
-                                        display_opt(summary.p95_rx), display_opt(summary.p95_tx), summary.valid_intervals
+                                        display_opt(summary.p95_rx),
+                                        display_opt(summary.p95_tx),
+                                        summary.valid_intervals
                                     ),
                                     TREND_MODE,
                                 );
@@ -1759,13 +1771,20 @@ impl Native {
                         [
                             "Collector Flow".into(),
                             format!("{} datagram", stats.accepted_datagrams),
-                            format!("{} drop · {} antre", stats.archive_dropped, stats.archive_pending),
+                            format!(
+                                "{} drop · {} antre",
+                                stats.archive_dropped, stats.archive_pending
+                            ),
                             format!("{} record tersimpan", stats.archived),
                         ],
                         format!(
                             "Antrean penuh {} · writer tertutup {} · SQLite gagal {}. Error: {:?} / {:?} / {:?}. Tidak mengukur drop kernel.",
-                            stats.archive_queue_full, stats.archive_writer_closed, stats.archive_sqlite_failed,
-                            stats.error, stats.archive_error, stats.alert_error
+                            stats.archive_queue_full,
+                            stats.archive_writer_closed,
+                            stats.archive_sqlite_failed,
+                            stats.error,
+                            stats.archive_error,
+                            stats.alert_error
                         ),
                         13,
                     );
@@ -1803,8 +1822,13 @@ impl Native {
                         ],
                         format!(
                             "Snapshot arsip {}. Database {} byte, WAL {} byte. Muat ulang untuk pengukuran baru.",
-                            if self.intel.recovery_view.is_some() { "baca-saja" } else { "utama" },
-                            s.main_bytes, s.wal_bytes
+                            if self.intel.recovery_view.is_some() {
+                                "baca-saja"
+                            } else {
+                                "utama"
+                            },
+                            s.main_bytes,
+                            s.wal_bytes
                         ),
                         STORAGE_MODE,
                     );
@@ -1871,10 +1895,17 @@ impl Native {
                             }
                             .into(),
                         ],
-                        &|| format!(
-                            "Subnet {} · {}\n{} alamat dalam prefix (termasuk alamat khusus). {} konfigurasi interface; {} IP unik teramati pada scope. UTC {}. Tidak teramati ≠ bebas. Tidak ada pemindaian atau reservasi otomatis. Prefix bertumpang tindih tidak dijumlahkan.",
-                            r.prefix, r.scope, r.prefix.cardinality(), r.configured, r.observed, r.observed_at
-                        ),
+                        &|| {
+                            format!(
+                                "Subnet {} · {}\n{} alamat dalam prefix (termasuk alamat khusus). {} konfigurasi interface; {} IP unik teramati pada scope. UTC {}. Tidak teramati ≠ bebas. Tidak ada pemindaian atau reservasi otomatis. Prefix bertumpang tindih tidak dijumlahkan.",
+                                r.prefix,
+                                r.scope,
+                                r.prefix.cardinality(),
+                                r.configured,
+                                r.observed,
+                                r.observed_at
+                            )
+                        },
                     );
                 }
                 if limited {
@@ -2801,7 +2832,12 @@ impl Native {
                         "Gagal membaca arsip"
                     };
                     push(
-                        [title.into(), state.into(), "Tidak diketahui".into(), "Muat ulang".into()],
+                        [
+                            title.into(),
+                            state.into(),
+                            "Tidak diketahui".into(),
+                            "Muat ulang".into(),
+                        ],
                         &|| "Tidak ada hasil pengukuran baru.".into(),
                     );
                 } else if self.intel.storage_loaded {

@@ -146,22 +146,24 @@ impl<K: Ord> Index<K> {
         let rows = self
             .prefixes
             .into_iter()
-            .map(|((key, prefix), (scope, configured, observed_at, partial))| {
-                let count = observed.get(&key).map_or(0, |ips| {
-                    let lo = ips.partition_point(|ip| *ip < prefix.network);
-                    let end = prefix.end();
-                    let hi = ips.partition_point(|ip| *ip <= end);
-                    hi - lo
-                });
-                SubnetRow {
-                    scope,
-                    prefix,
-                    configured: configured.len(),
-                    observed: count,
-                    observed_at,
-                    partial,
-                }
-            })
+            .map(
+                |((key, prefix), (scope, configured, observed_at, partial))| {
+                    let count = observed.get(&key).map_or(0, |ips| {
+                        let lo = ips.partition_point(|ip| *ip < prefix.network);
+                        let end = prefix.end();
+                        let hi = ips.partition_point(|ip| *ip <= end);
+                        hi - lo
+                    });
+                    SubnetRow {
+                        scope,
+                        prefix,
+                        configured: configured.len(),
+                        observed: count,
+                        observed_at,
+                        partial,
+                    }
+                },
+            )
             .collect();
         Subnets {
             rows,
@@ -248,14 +250,7 @@ mod tests {
     fn bound_and_partial_coverage() {
         let mut index = Index::default();
         for k in 0..513 {
-            index.configure(
-                k,
-                k.to_string(),
-                "192.0.2.1".parse().unwrap(),
-                24,
-                0,
-                true,
-            );
+            index.configure(k, k.to_string(), "192.0.2.1".parse().unwrap(), 24, 0, true);
         }
         let out = index.finish();
         assert_eq!(out.rows.len(), 512);

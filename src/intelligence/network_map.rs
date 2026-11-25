@@ -546,8 +546,8 @@ pub fn subnets(s: &RouterSnapshot) -> super::overview::Subnets {
         let Some((ip, bits)) = prefix(&r.subject) else {
             continue;
         };
-        let vrf_known = aligned(vrf, stamp)
-            && scope.vrf.get(r.value.as_str()).is_some_and(Option::is_some);
+        let vrf_known =
+            aligned(vrf, stamp) && scope.vrf.get(r.value.as_str()).is_some_and(Option::is_some);
         let label = if vrf_known {
             scope.name(Some(&r.value))
         } else {
@@ -728,7 +728,11 @@ mod tests {
         assert_eq!(same.len(), 2);
         assert_ne!(same[0].scope, same[1].scope);
         assert!(same.iter().all(|r| r.observed == 1 && r.partial));
-        assert!(view.rows.iter().any(|r| r.prefix.to_string() == "2001:db8::/64"));
+        assert!(
+            view.rows
+                .iter()
+                .any(|r| r.prefix.to_string() == "2001:db8::/64")
+        );
     }
 
     #[test]

@@ -1,3 +1,11 @@
+# CI format recovery — candidate, verification pending
+
+- Applied 13 exact formatting corrections from run 45552687279 (three Rust files).
+- Baseline Rust tests: 76 passed, 0 failed, 2 ignored; release build and Clippy passed. Formatting blocked CLI/GUI/installer.
+- No version bump or feature change; new manual CI required.
+
+---
+
 # P1 corrective candidate — gate pending
 
 - Align subnet evidence timestamps and VRF mapping; exclude inactive DHCP leases from observed count.
