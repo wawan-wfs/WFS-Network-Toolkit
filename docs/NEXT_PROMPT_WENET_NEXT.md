@@ -1,3 +1,11 @@
+# Latest checkpoint — CI format recovery (run 45672963967)
+
+Run [45672963967](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45672963967), attempt 1, exact parent 19d4686e8b04f32aec21d6434f3a5ec294777515: 9/12 gates PASS; three format gates FAIL; 89 Rust tests passed, 0 failed, 2 ignored; Clippy and release build PASS. CLI/native smoke/NSIS skipped. All 43 rustfmt hunks across nine files applied from verified artifact 15049804007. New exact SHA NOT TESTED. See [CI recovery evidence](CI_FORMAT_RECOVERY_45672963967.md).
+
+Do not repeat these 43 corrections or rerun the old SHA. Manually dispatch Windows workflow on the current repaired main; require all 12 gates, CLI, native smoke (graph pan/zoom, chart selection, DHCPv6 history, IPAM export/backup, Syslog), installer packaging and checksum verification. Repair actual remaining failures without weakening gates. After successful P0, implement the entire P1 batch below in integrated native code, including embedded dashboard chart, connected-component graph, scope-aware IPAM, history/recovery, vetted SNMPv3 authPriv and authenticated TLS Syslog with negative security tests, Flow Intelligence, three measured million-record benchmark runs and premium redesign of all modules. Preserve all features, database compatibility, single-window Admin, WFS Project branding, Rust native without WebView and manual-only workflow. Deliver exact source and accepted artifacts with evidence, no version bump or fabricated results.
+
+---
+
 # Latest checkpoint — Extreme Large Development Batch, graph/history candidate
 
 Accepted baseline a11ea99f passed run 45667059429 (all 11 gates, 83 Rust tests, native GUI smoke and NSIS packaging; hashes verified). Read WENET_GRAPH_HISTORY_BATCH.md, TEST_REPORT.md, CAPABILITY_MATRIX.md and previous sections. New candidate is not compiled or accepted. Exact SQL history contract passed 7/7 locally, all four blob hashes match. Preserve all previous behavior and manual-only workflow. Do not repeat earlier completed audits as a substitute for implementation.

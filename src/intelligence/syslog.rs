@@ -32,7 +32,9 @@ fn priority(line: &str) -> Option<(Format, u8, u8)> {
         // parse/persist message, hostname, timestamps or structured data.
         let fields: Vec<_> = header.splitn(6, ' ').collect();
         if fields.len() != 6
-            || fields[..5].iter().any(|s| s.is_empty() || s.len() > 255 || !s.is_ascii())
+            || fields[..5]
+                .iter()
+                .any(|s| s.is_empty() || s.len() > 255 || !s.is_ascii())
             || !(fields[5].starts_with('[') || fields[5].starts_with('-'))
         {
             return None;
@@ -73,7 +75,9 @@ pub fn summarize(bytes: &[u8]) -> Result<Summary> {
 pub fn read(path: &Path) -> Result<Summary> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    file.take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
     summarize(&bytes)
 }
 

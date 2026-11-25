@@ -204,9 +204,7 @@ impl Table {
             Self::Neighbors => {
                 "/rest/ip/neighbor?.proplist=identity,interface,mac-address,discovered-by"
             }
-            Self::Dhcp6Server => {
-                "/rest/ipv6/dhcp-server?.proplist=name,interface,disabled,invalid"
-            }
+            Self::Dhcp6Server => "/rest/ipv6/dhcp-server?.proplist=name,interface,disabled,invalid",
             Self::Dhcp6Binding => {
                 "/rest/ipv6/dhcp-server/binding?.proplist=address,server,status,disabled"
             }

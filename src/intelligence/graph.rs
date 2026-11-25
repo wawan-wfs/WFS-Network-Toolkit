@@ -60,8 +60,7 @@ fn key(edge: &Edge, left: bool, index: usize) -> Key {
     // Router-scoped interface/bridge/VLAN labels are names, not a physical ID.
     // FDB, neighbor, routes, lists and missing authorities must remain isolated.
     let router = edge.authority.clone().unwrap_or_default();
-    let isolation = if router.is_empty()
-        || !matches!(kind, "Interface" | "Bridge" | "VLAN" | "VRF")
+    let isolation = if router.is_empty() || !matches!(kind, "Interface" | "Bridge" | "VLAN" | "VRF")
     {
         format!("{index}:{}:{}", u8::from(left), edge.scope)
     } else if matches!(kind, "Interface") {
@@ -173,15 +172,18 @@ mod tests {
     use crate::intelligence::{network_map::Observation, router::Table};
 
     fn edge(router: &str, name: &str, port: &str, scope: &str) -> Edge {
-        Edge::scoped(router, &Observation {
-            subject: name.into(),
-            target: port.into(),
-            scope: scope.into(),
-            basis: "Relasi eksplisit",
-            source: Table::BridgePorts.name(),
-            observed_at: 42,
-            details: "fixture".into(),
-        })
+        Edge::scoped(
+            router,
+            &Observation {
+                subject: name.into(),
+                target: port.into(),
+                scope: scope.into(),
+                basis: "Relasi eksplisit",
+                source: Table::BridgePorts.name(),
+                observed_at: 42,
+                details: "fixture".into(),
+            },
+        )
     }
 
     #[test]

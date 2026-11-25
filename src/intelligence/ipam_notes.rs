@@ -224,8 +224,11 @@ pub fn export_summary(path: &Path, dest: &Path) -> Result<()> {
         "inactive_keys": rows.len() - active,
     });
     let stage = super::archive_ops::Stage::new(dest)?;
-    let mut file = std::fs::OpenOptions::new().create_new(true).write(true)
-        .open(&stage.file).map_err(error)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stage.file)
+        .map_err(error)?;
     serde_json::to_writer_pretty(&mut file, &report).map_err(error)?;
     file.write_all(b"\n").map_err(error)?;
     file.sync_all().map_err(error)?;
@@ -238,7 +241,13 @@ pub fn backup(path: &Path, dest: &Path) -> Result<()> {
     use std::{fs::OpenOptions, time::Instant};
     let source = open(path, false)?;
     let stage = super::archive_ops::Stage::new(dest)?;
-    drop(OpenOptions::new().create_new(true).write(true).open(&stage.file).map_err(error)?);
+    drop(
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&stage.file)
+            .map_err(error)?,
+    );
     let mut output = Connection::open_with_flags(&stage.file, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(error)?;
     {
@@ -255,17 +264,25 @@ pub fn backup(path: &Path, dest: &Path) -> Result<()> {
             }
         }
     }
-    let mode: String = output.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0)).map_err(error)?;
+    let mode: String = output
+        .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
+        .map_err(error)?;
     if !mode.eq_ignore_ascii_case("delete") {
         return Err("Backup IPAM tidak mandiri.".into());
     }
     verify(&output)?;
-    let integrity: String = output.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(error)?;
+    let integrity: String = output
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .map_err(error)?;
     if integrity != "ok" {
         return Err("Pemeriksaan integritas backup IPAM gagal.".into());
     }
     drop(output);
-    OpenOptions::new().write(true).open(&stage.file).and_then(|f| f.sync_all()).map_err(error)?;
+    OpenOptions::new()
+        .write(true)
+        .open(&stage.file)
+        .and_then(|f| f.sync_all())
+        .map_err(error)?;
     stage.publish(dest)
 }
 

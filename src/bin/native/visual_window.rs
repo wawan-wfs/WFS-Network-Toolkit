@@ -170,9 +170,24 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                     for link in &graph.links {
                         let a = &graph.nodes[link.from];
                         let b = &graph.nodes[link.to];
-                        let p = point(a.x + ni::graph::NODE_WIDTH / 2, a.y + ni::graph::NODE_HEIGHT / 2);
-                        let q = point(b.x + ni::graph::NODE_WIDTH / 2, b.y + ni::graph::NODE_HEIGHT / 2);
-                        vis_line(dc, p, q, if link.evidence == state.selected { teal } else { color(156, 177, 195) });
+                        let p = point(
+                            a.x + ni::graph::NODE_WIDTH / 2,
+                            a.y + ni::graph::NODE_HEIGHT / 2,
+                        );
+                        let q = point(
+                            b.x + ni::graph::NODE_WIDTH / 2,
+                            b.y + ni::graph::NODE_HEIGHT / 2,
+                        );
+                        vis_line(
+                            dc,
+                            p,
+                            q,
+                            if link.evidence == state.selected {
+                                teal
+                            } else {
+                                color(156, 177, 195)
+                            },
+                        );
                     }
                     for node in &graph.nodes {
                         let (x, y) = point(node.x, node.y);
@@ -180,22 +195,56 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                             continue;
                         }
                         let chosen = node.incident.contains(&state.selected);
-                        fill(dc, &vis_rect(x, y, nw, nh), if chosen { color(213, 240, 237) } else { color(232, 239, 245) });
+                        fill(
+                            dc,
+                            &vis_rect(x, y, nw, nh),
+                            if chosen {
+                                color(213, 240, 237)
+                            } else {
+                                color(232, 239, 245)
+                            },
+                        );
                         vis_text(dc, vis_rect(x + 5, y, nw - 10, 17), node.kind, teal, false);
-                        vis_text(dc, vis_rect(x + 5, y + 17, nw - 10, 19), &node.name, ink, false);
+                        vis_text(
+                            dc,
+                            vis_rect(x + 5, y + 17, nw - 10, 19),
+                            &node.name,
+                            ink,
+                            false,
+                        );
                         if nh >= 52 {
-                            vis_text(dc, vis_rect(x + 5, y + 36, nw - 10, 15), &node.authority, ink, false);
+                            vis_text(
+                                dc,
+                                vis_rect(x + 5, y + 36, nw - 10, 15),
+                                &node.authority,
+                                ink,
+                                false,
+                            );
                         }
                     }
-                    unsafe { RestoreDC(dc, saved); }
+                    unsafe {
+                        RestoreDC(dc, saved);
+                    }
                 }
                 if let Some(edge) = edges.get(state.selected) {
                     let detail = format!(
                         "{} → {} · {}/{}\n{} · {} · UTC {}\n{}\nRelasi logis; tidak membuktikan kabel fisik.",
-                        edge.left, edge.right, state.selected + 1, edges.len(),
-                        edge.scope, edge.source, edge.utc, edge.details
+                        edge.left,
+                        edge.right,
+                        state.selected + 1,
+                        edges.len(),
+                        edge.scope,
+                        edge.source,
+                        edge.utc,
+                        edge.details
                     );
-                    vis_text(dc, vis_rect(20, height - 112, width - 40, 104), &detail, ink, true);
+                    vis_text(
+                        dc,
+                        vis_rect(20, height - 112, width - 40, 104),
+                        &detail,
+                        ink,
+                        true,
+                    );
                 }
             }
         }
@@ -213,7 +262,10 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
             let points = series.range(end, state.span);
             let max = ni::visual::Series::max_value(points);
             let summary = interface_trend::summarize(
-                &points.iter().cloned().collect::<std::collections::VecDeque<_>>(),
+                &points
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::VecDeque<_>>(),
             );
             let left = 75;
             let right = width - 24;
@@ -409,7 +461,9 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 && let Some(id) = state.viewport.hit(graph, x - 20, y - 88)
                             {
                                 let incident = &graph.nodes[id].incident;
-                                if let Some(edge) = incident.iter().find(|&&i| i > state.selected)
+                                if let Some(edge) = incident
+                                    .iter()
+                                    .find(|&&i| i > state.selected)
                                     .or_else(|| incident.first())
                                 {
                                     state.selected = *edge;
@@ -519,7 +573,9 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
         let mut smoke_error = false;
         if smoke {
             let before = VISUAL_STATE.with(|slot| {
-                slot.borrow().as_ref().map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
+                slot.borrow()
+                    .as_ref()
+                    .map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
             });
             unsafe {
                 SendMessageW(h, WM_KEYDOWN, 0x6b, 0);
@@ -528,12 +584,13 @@ fn show_visual_inner(owner: HWND, data: VisualData, selected: usize, smoke: bool
                 UpdateWindow(h);
             }
             let after = VISUAL_STATE.with(|slot| {
-                slot.borrow().as_ref().map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
+                slot.borrow()
+                    .as_ref()
+                    .map(|s| (s.span, s.viewport.scale, s.viewport.pan_x))
             });
             smoke_error = match (before, after) {
                 (Some((span, scale, pan)), Some((new_span, new_scale, new_pan))) => {
-                    span == new_span
-                        || (scale != new_scale && pan == new_pan)
+                    span == new_span || (scale != new_scale && pan == new_pan)
                 }
                 _ => true,
             };

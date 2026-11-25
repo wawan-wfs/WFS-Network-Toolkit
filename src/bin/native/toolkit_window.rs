@@ -991,9 +991,14 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
-                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => false,
+                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => {
+                    false
+                }
                 INTEL_RECORD
-                    if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) =>
+                    if matches!(
+                        selection(self.h(INTEL_MODE)),
+                        DHCP6_MODE | DHCP6_HISTORY_MODE
+                    ) =>
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
@@ -2378,7 +2383,10 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
         }
         let summary = notes_path.with_file_name("notes-smoke-summary.json");
         ni::ipam_notes::export_summary(&notes_path, &summary)?;
-        if std::fs::read_to_string(&summary).map_err(|e| e.to_string())?.contains("192.0.2") {
+        if std::fs::read_to_string(&summary)
+            .map_err(|e| e.to_string())?
+            .contains("192.0.2")
+        {
             return Err("Ringkasan IPAM memuat alamat.".into());
         }
         smoke_trace("Offline syslog summary fixture");

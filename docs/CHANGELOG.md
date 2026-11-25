@@ -1,3 +1,11 @@
+# CI format recovery — acceptance pending (2026-11-25)
+
+Run [45672963967](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45672963967), attempt 1, exact parent 19d4686e8b04f32aec21d6434f3a5ec294777515: 9/12 gates PASS; three format gates FAIL; 89 Rust tests passed, 0 failed, 2 ignored; Clippy and release build PASS. CLI/native smoke/NSIS skipped. All 43 rustfmt hunks across nine files applied from verified artifact 15049804007. New exact SHA NOT TESTED. See [CI recovery evidence](CI_FORMAT_RECOVERY_45672963967.md).
+
+No version, feature, schema, dependency or workflow change.
+
+---
+
 # Graph and history development candidate — Windows acceptance pending
 
 - Baseline a11ea99f: 11/11 CI gates, 83 Rust tests, native smoke and installer packaging passed; verified hashes.

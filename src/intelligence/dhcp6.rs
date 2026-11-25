@@ -179,8 +179,16 @@ mod tests {
     fn maps_only_aligned_complete_unique_server_and_vrf() {
         use super::super::router::{Authority, RouterSnapshot, Table};
         let mut s = RouterSnapshot::new(&Authority::parse("lab.example").unwrap(), 100);
-        s.ingest(Table::Vrf, Ok(br#"[{"name":"blue","interfaces":"ether1"}]"#.to_vec()), 100);
-        s.ingest(Table::Dhcp6Server, Ok(br#"[{"name":"dhcp","interface":"ether1","disabled":false}]"#.to_vec()), 100);
+        s.ingest(
+            Table::Vrf,
+            Ok(br#"[{"name":"blue","interfaces":"ether1"}]"#.to_vec()),
+            100,
+        );
+        s.ingest(
+            Table::Dhcp6Server,
+            Ok(br#"[{"name":"dhcp","interface":"ether1","disabled":false}]"#.to_vec()),
+            100,
+        );
         s.ingest(Table::Dhcp6Binding, Ok(br#"[{"address":"2001:db8::/64","server":"dhcp","status":"bound","disabled":false}]"#.to_vec()), 160);
         let scope = binding_scope(&s, &s.dhcp6[0]);
         assert_eq!(scope.interface.as_deref(), Some("ether1"));

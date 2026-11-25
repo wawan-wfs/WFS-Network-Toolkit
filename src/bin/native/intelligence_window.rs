@@ -864,7 +864,9 @@ impl Native {
         })
     }
     fn dhcp6_history_path(&self) -> Result<PathBuf> {
-        Ok(self.primary_archive_path()?.with_file_name("dhcp6-history-v1.sqlite3"))
+        Ok(self
+            .primary_archive_path()?
+            .with_file_name("dhcp6-history-v1.sqlite3"))
     }
     fn load_dhcp6_history(&mut self, save: bool) -> Result<()> {
         if save && self.intel.recovery_view.is_some() {
@@ -873,13 +875,18 @@ impl Native {
         let key = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
         let path = self.dhcp6_history_path()?;
         let sample = if save {
-            let snapshot = self.intel.routers.get(&key).ok_or("Baca router ini terlebih dahulu.")?;
+            let snapshot = self
+                .intel
+                .routers
+                .get(&key)
+                .ok_or("Baca router ini terlebih dahulu.")?;
             let sample = ni::dhcp6_history::Capture::from_snapshot(snapshot)?;
             if popup(
                 self.hwnd,
                 "Simpan snapshot DHCPv6 dengan alamat, prefix dan scope ke database lokal terpisah? DUID dan kredensial tidak disimpan. Data tidak disamarkan.",
                 MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-            ) != IDYES {
+            ) != IDYES
+            {
                 return Ok(());
             }
             Some(sample)
@@ -1592,7 +1599,11 @@ impl Native {
             }
             INTEL_IMPORT if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => {
                 if let Some(path) = typed_file_dialog(
-                    self.hwnd, false, "", "Syslog (*.log;*.txt)\0*.log;*.txt\0", "",
+                    self.hwnd,
+                    false,
+                    "",
+                    "Syslog (*.log;*.txt)\0*.log;*.txt\0",
+                    "",
                 )? {
                     self.intel.syslog_summary = None;
                     self.start_intel(move || ni::syslog::read(&path).map(IntelReply::Syslog))?;
@@ -1662,7 +1673,12 @@ impl Native {
             INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
                 self.archived_router_views()?
             }
-            INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) => {
+            INTEL_HISTORY
+                if matches!(
+                    selection(self.h(INTEL_MODE)),
+                    DHCP6_MODE | DHCP6_HISTORY_MODE
+                ) =>
+            {
                 self.load_dhcp6_history(false)?;
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
@@ -1675,7 +1691,12 @@ impl Native {
                     combined_history(ni::now(), &path, include_legacy).map(IntelReply::History)
                 })?
             }
-            INTEL_RECORD if matches!(selection(self.h(INTEL_MODE)), DHCP6_MODE | DHCP6_HISTORY_MODE) => {
+            INTEL_RECORD
+                if matches!(
+                    selection(self.h(INTEL_MODE)),
+                    DHCP6_MODE | DHCP6_HISTORY_MODE
+                ) =>
+            {
                 self.load_dhcp6_history(true)?;
             }
             INTEL_RECORD if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
@@ -1779,16 +1800,22 @@ impl Native {
                     let (name, filter, ext) = if redact {
                         ("WeNet-IPAM-summary.json", "JSON (*.json)\0*.json\0", "json")
                     } else {
-                        ("WeNet-IPAM-backup.sqlite3", "SQLite (*.sqlite3)\0*.sqlite3\0", "sqlite3")
+                        (
+                            "WeNet-IPAM-backup.sqlite3",
+                            "SQLite (*.sqlite3)\0*.sqlite3\0",
+                            "sqlite3",
+                        )
                     };
                     let Some(dest) = typed_file_dialog(self.hwnd, true, name, filter, ext)? else {
                         return Ok(());
                     };
-                    if !redact && popup(
-                        self.hwnd,
-                        "Backup IPAM memuat alamat, scope dan catatan operator tanpa penyamaran. Simpan ke file baru?",
-                        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-                    ) != IDYES {
+                    if !redact
+                        && popup(
+                            self.hwnd,
+                            "Backup IPAM memuat alamat, scope dan catatan operator tanpa penyamaran. Simpan ke file baru?",
+                            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+                        ) != IDYES
+                    {
                         return Ok(());
                     }
                     self.start_intel(move || {
@@ -2056,7 +2083,10 @@ impl Native {
                                         summary.valid_intervals
                                     ),
                                     TREND_MODE,
-                                    Some(ni::visual::Series::new(format!("{key} / {name}"), points)),
+                                    Some(ni::visual::Series::new(
+                                        format!("{key} / {name}"),
+                                        points,
+                                    )),
                                 );
                             }
                         }
@@ -2217,7 +2247,8 @@ impl Native {
                         "Sumber tidak diautentikasi".into(),
                         "Buka modul".into(),
                     ],
-                    "Impor file lokal pilihan operator; tidak ada listener atau penyimpanan pesan.".into(),
+                    "Impor file lokal pilihan operator; tidak ada listener atau penyimpanan pesan."
+                        .into(),
                     SYSLOG_MODE,
                     None,
                 );
@@ -2263,9 +2294,17 @@ impl Native {
                             "Ringkasan impor".into(),
                             format!("{} diterima", summary.accepted),
                             format!("{} ditolak", summary.rejected),
-                            if summary.limited { "Batas baris" } else { "File dibaca" }.into(),
+                            if summary.limited {
+                                "Batas baris"
+                            } else {
+                                "File dibaca"
+                            }
+                            .into(),
                         ],
-                        &|| "Header tidak diautentikasi. Isi pesan dan identitas tidak disimpan.".into(),
+                        &|| {
+                            "Header tidak diautentikasi. Isi pesan dan identitas tidak disimpan."
+                                .into()
+                        },
                     );
                     for ((format, facility, severity), count) in &summary.groups {
                         push(
@@ -2275,10 +2314,12 @@ impl Native {
                                 format!("Severity {severity}"),
                                 format!("{count} baris"),
                             ],
-                            &|| format!(
-                                "Header tidak diautentikasi. {} diterima, {} ditolak; batas baris {}. Pesan, identitas host dan timestamp tidak disimpan.",
-                                summary.accepted, summary.rejected, summary.limited
-                            ),
+                            &|| {
+                                format!(
+                                    "Header tidak diautentikasi. {} diterima, {} ditolak; batas baris {}. Pesan, identitas host dan timestamp tidak disimpan.",
+                                    summary.accepted, summary.rejected, summary.limited
+                                )
+                            },
                         );
                     }
                     "Ringkasan Syslog offline. Tidak membuktikan pengirim atau insiden; tidak ada listener jaringan. Detail memperlihatkan jumlah ditolak."
@@ -2297,17 +2338,30 @@ impl Native {
                                 format!("{} / {} baris", capture.rows.len(), capture.reported),
                             ],
                             &|| {
-                                let sample = capture.rows.iter().take(100).map(|r| {
-                                    format!(
-                                        "{}/{} · {} · {} · if {} · VRF {}",
-                                        r.binding.prefix, r.binding.bits, r.binding.server,
-                                        r.binding.state(), r.scope.interface.as_deref().unwrap_or("?"),
-                                        r.scope.vrf.as_deref().unwrap_or("?")
-                                    )
-                                }).collect::<Vec<_>>().join("\n");
+                                let sample = capture
+                                    .rows
+                                    .iter()
+                                    .take(100)
+                                    .map(|r| {
+                                        format!(
+                                            "{}/{} · {} · {} · if {} · VRF {}",
+                                            r.binding.prefix,
+                                            r.binding.bits,
+                                            r.binding.server,
+                                            r.binding.state(),
+                                            r.scope.interface.as_deref().unwrap_or("?"),
+                                            r.scope.vrf.as_deref().unwrap_or("?")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
                                 format!(
                                     "{} · UTC {} · {:?}\n{} dari {} baris disimpan; detail maks. 100. Histori snapshot, bukan interval assignment.\n{sample}",
-                                    router, capture.stamp, capture.coverage, capture.rows.len(), capture.reported
+                                    router,
+                                    capture.stamp,
+                                    capture.coverage,
+                                    capture.rows.len(),
+                                    capture.reported
                                 )
                             },
                         );

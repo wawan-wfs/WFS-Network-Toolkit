@@ -1,3 +1,18 @@
+# Latest CI status — graph/history format recovery
+
+Run [45672963967](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45672963967), attempt 1, exact parent 19d4686e8b04f32aec21d6434f3a5ec294777515: 9/12 gates PASS; three format gates FAIL; 89 Rust tests passed, 0 failed, 2 ignored; Clippy and release build PASS. CLI/native smoke/NSIS skipped. All 43 rustfmt hunks across nine files applied from verified artifact 15049804007. New exact SHA NOT TESTED. See [CI recovery evidence](CI_FORMAT_RECOVERY_45672963967.md).
+
+| Capability | Evidence at tested parent | Repaired HEAD |
+|---|---|---|
+| Rust regression, Clippy, release build | PASS | NOT TESTED |
+| DHCPv6 history and IPAM SQL | PASS | NOT TESTED |
+| Format (all three gates) | FAIL | Corrections applied, NOT TESTED |
+| Native graph pan/zoom, chart navigation, IPAM backup/export, DHCPv6 and Syslog smoke | SKIPPED | NOT TESTED |
+| CLI / NSIS / package hashes / screenshot | SKIPPED | NOT TESTED |
+| Embedded dashboard, connected-component layout, advanced IPAM recovery, SNMPv3 authPriv, authenticated TLS Syslog, Flow Intelligence, 3x million-record benchmark, premium redesign | P1 pending | P1 pending |
+
+---
+
 # Latest evidence status — graph/history batch
 
 | Capability | Baseline a11ea99f | New candidate |

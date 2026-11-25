@@ -34,16 +34,24 @@ pub struct Capture {
 }
 impl Capture {
     pub fn from_snapshot(s: &RouterSnapshot) -> Result<Self> {
-        let c = s.coverage.iter().rev()
+        let c = s
+            .coverage
+            .iter()
+            .rev()
             .find(|c| c.source == Table::Dhcp6Binding.name())
             .ok_or("Tabel DHCPv6 belum diminta.")?;
         let index = ScopeIndex::new(s);
         let rows: Vec<_> = if c.state == CoverageState::Unavailable {
             Vec::new()
         } else {
-            s.dhcp6.iter().filter(|b| b.observed_at == c.observed_at)
+            s.dhcp6
+                .iter()
+                .filter(|b| b.observed_at == c.observed_at)
                 .take(MAX_ROWS)
-                .map(|b| Row { binding: b.clone(), scope: index.scope(b) })
+                .map(|b| Row {
+                    binding: b.clone(),
+                    scope: index.scope(b),
+                })
                 .collect()
         };
         let coverage = if c.state == CoverageState::CompleteSnapshot && c.rows != rows.len() {
@@ -69,8 +77,10 @@ impl Capture {
             || self.stamp > i64::MAX as u64
             || self.rows.len() > MAX_ROWS
             || self.reported < self.rows.len()
-            || (self.coverage == CoverageState::CompleteSnapshot && self.reported != self.rows.len())
-            || (self.coverage == CoverageState::Unavailable && (!self.rows.is_empty() || self.reported != 0))
+            || (self.coverage == CoverageState::CompleteSnapshot
+                && self.reported != self.rows.len())
+            || (self.coverage == CoverageState::Unavailable
+                && (!self.rows.is_empty() || self.reported != 0))
             || self.rows.iter().any(|r| {
                 !r.binding.valid()
                     || r.binding.observed_at != self.stamp
@@ -89,27 +99,46 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 fn open(path: &Path, write: bool) -> Result<Connection> {
     let flags = if write {
-        std::fs::create_dir_all(path.parent().ok_or("Path histori tidak valid.")?).map_err(error)?;
+        std::fs::create_dir_all(path.parent().ok_or("Path histori tidak valid.")?)
+            .map_err(error)?;
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
     } else {
         OpenFlags::SQLITE_OPEN_READ_ONLY
     };
     let mut conn = Connection::open_with_flags(path, flags).map_err(error)?;
-    conn.busy_timeout(Duration::from_millis(1500)).map_err(error)?;
-    conn.execute_batch("PRAGMA trusted_schema=OFF;").map_err(error)?;
+    conn.busy_timeout(Duration::from_millis(1500))
+        .map_err(error)?;
+    conn.execute_batch("PRAGMA trusted_schema=OFF;")
+        .map_err(error)?;
     fn verify(conn: &Connection) -> Result<()> {
-        let id: i64 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).map_err(error)?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(error)?;
+        let id: i64 = conn
+            .pragma_query_value(None, "application_id", |r| r.get(0))
+            .map_err(error)?;
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(error)?;
         if id != APP_ID || version != 1 {
             return Err("Database histori DHCPv6 tidak kompatibel.".into());
         }
         Ok(())
     }
     if write {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
-        let id: i64 = tx.pragma_query_value(None, "application_id", |r| r.get(0)).map_err(error)?;
-        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(error)?;
-        let count: i64 = tx.query_row("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'", [], |r| r.get(0)).map_err(error)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(error)?;
+        let id: i64 = tx
+            .pragma_query_value(None, "application_id", |r| r.get(0))
+            .map_err(error)?;
+        let version: i64 = tx
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(error)?;
+        let count: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(error)?;
         if id == 0 && version == 0 && count == 0 {
             tx.execute_batch(SCHEMA).map_err(error)?;
         }
@@ -128,18 +157,25 @@ pub fn save(path: &Path, sample: &Capture) -> Result<()> {
         return Err("Snapshot DHCPv6 melewati batas 256 KiB; tidak disimpan.".into());
     }
     let mut conn = open(path, true)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(error)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(error)?;
     let stamp = sample.stamp as i64;
-    let existing: Option<String> = tx.query_row(
-        "SELECT payload FROM dhcp6_sample WHERE authority=?1 AND stamp=?2",
-        params![sample.authority, stamp],
-        |r| r.get(0),
-    ).optional().map_err(error)?;
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT payload FROM dhcp6_sample WHERE authority=?1 AND stamp=?2",
+            params![sample.authority, stamp],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(error)?;
     match existing {
-        Some(old) if old == payload => {},
+        Some(old) if old == payload => {}
         Some(_) => return Err("Konflik snapshot dengan waktu sama; tidak ditimpa.".into()),
         None => {
-            let n = tx.execute(INSERT, params![sample.authority, stamp, payload]).map_err(error)?;
+            let n = tx
+                .execute(INSERT, params![sample.authority, stamp, payload])
+                .map_err(error)?;
             if n != 1 {
                 return Err("Kapasitas histori DHCPv6 penuh (120 sampel/router, 32 router atau 64 MiB payload). Tidak ada histori dihapus.".into());
             }
@@ -182,8 +218,12 @@ mod tests {
     #[test]
     fn preserves_coverage_conflicts_and_isolation() {
         let dir = std::env::temp_dir().join(format!(
-            "wenet-dhcp6-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            "wenet-dhcp6-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let path = dir.join("history.sqlite3");
         let authority = Authority::parse("router.test").unwrap();
@@ -203,7 +243,11 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].coverage, CoverageState::Unavailable);
         assert_eq!(rows[1].rows[0].binding.prefix.to_string(), "2001:db8::");
-        assert!(page(&path, &Authority::parse("other.test").unwrap().display()).unwrap().is_empty());
+        assert!(
+            page(&path, &Authority::parse("other.test").unwrap().display())
+                .unwrap()
+                .is_empty()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
