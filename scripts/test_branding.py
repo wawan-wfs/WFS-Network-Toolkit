@@ -57,7 +57,28 @@ class BrandContract(unittest.TestCase):
         self.assertIn('"by WFS Project"',ui)
         self.assertIn('BRAND_TAGLINE',ui)
         workflow=read('.github/workflows/windows.yml')
-        self.assertIn('on:\n  workflow_dispatch:\npermissions:',workflow)
+        # Current authorized CI contract: exactly main push and manual dispatch.
+        # Verify the entire top-level trigger/concurrency/permissions section;
+        # checking workflow_dispatch alone would silently permit extra events.
+        expected = (
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "  push:\n"
+            "    branches: [main]\n"
+            "concurrency:\n"
+            "  group: wenet-windows-${{ github.ref }}\n"
+            "  cancel-in-progress: false\n"
+            "permissions:\n"
+            "  contents: read\n"
+        )
+        self.assertEqual(workflow.split("\non:\n", 1)[1].split("jobs:\n", 1)[0],
+                         expected.removeprefix("on:\n"))
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("scripts/gate_runner.py --out gate-evidence", workflow)
+        self.assertIn("BUILD_PROVENANCE.json", workflow)
+        self.assertIn("git archive --format=zip", workflow)
+        self.assertIn("SHA256SUMS.txt", workflow)
+        self.assertNotIn("permissions: write-all", workflow)
         self.assertIn('WeNet-Toolkit.exe',workflow)
         self.assertIn('WeNet-Toolkit.nsi',workflow)
         self.assertNotIn('WFS-Network-Toolkit.exe',workflow)

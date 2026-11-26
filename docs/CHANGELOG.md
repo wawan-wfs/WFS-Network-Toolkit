@@ -1,3 +1,11 @@
+# Latest change — CI contract recovery
+
+- Align branding regression with authorized main-push and workflow_dispatch CI, exact concurrency and read-only permissions; preserve existing binary, icon, UI credit and upgrade checks.
+- Verify provenance/source/checksum and checkout credential policy in static contract.
+- Record verified 11/12 gate evidence; no application version bump, no deployment and no claim of accepted installer.
+
+---
+
 # CI format recovery — acceptance pending (2026-11-25)
 
 Run [45672963967](https://github.com/wawan-wfs/WFS-Network-Toolkit/actions/runs/45672963967), attempt 1, exact parent 19d4686e8b04f32aec21d6434f3a5ec294777515: 9/12 gates PASS; three format gates FAIL; 89 Rust tests passed, 0 failed, 2 ignored; Clippy and release build PASS. CLI/native smoke/NSIS skipped. All 43 rustfmt hunks across nine files applied from verified artifact 15049804007. New exact SHA NOT TESTED. See [CI recovery evidence](CI_FORMAT_RECOVERY_45672963967.md).
