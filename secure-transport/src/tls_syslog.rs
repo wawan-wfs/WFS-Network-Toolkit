@@ -174,6 +174,7 @@ pub fn receive_once(path: &Path) -> Result<Value> {
         json!({"format": format!("{format:?}"), "facility": facility, "severity": severity, "count": count})
     }).collect();
     Ok(json!({"schema": 1, "transport": "mutual_tls", "peer_certificate_sha256": pin,
+        "bind": config.bind.to_string(), "observed_utc": wfs_network_toolkit::intelligence::now(),
         "accepted": summary.accepted, "rejected": summary.rejected, "groups": groups}))
 }
 

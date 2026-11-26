@@ -54,7 +54,8 @@ const NOTES_MODE: usize = 28;
 const DHCP6_HISTORY_MODE: usize = 29;
 const SYSLOG_MODE: usize = 30;
 const REPLAY_MODE: usize = 31;
-const INTEL_MODES: [&str; 32] = [
+const SECURE_MODE: usize = 32;
+const INTEL_MODES: [&str; 33] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -87,6 +88,7 @@ const INTEL_MODES: [&str; 32] = [
     "Histori DHCPv6 / PD",
     "Syslog offline",
     "Replay Flow offline",
+    "Secure Transport",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -115,6 +117,7 @@ enum IntelReply {
     Dhcp6History(String, Vec<ni::dhcp6_history::Capture>),
     Syslog(ni::syslog::Summary),
     FlowReplay(ni::flow_replay::Report),
+    SecureHistory(Vec<ni::secure_monitor::Report>),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -178,6 +181,7 @@ struct IntelState {
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
     flow_replay: Option<ni::flow_replay::Report>,
+    secure_history: Vec<ni::secure_monitor::Report>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -241,9 +245,12 @@ impl IntelState {
 }
 
 fn ask_router_credentials(h: HWND, authority: &Authority) -> Result<Option<nw::Credentials>> {
-    let caption = w::wide("Kredensial MikroTik — hanya sesi ini");
-    let message = w::wide("Masukkan akun khusus baca. Password tidak disimpan.");
-    let target = w::wide(&authority.display());
+    ask_session_credentials(h, &authority.display(), "Kredensial MikroTik — hanya sesi ini", "Masukkan akun khusus baca. Password tidak disimpan.")
+}
+fn ask_session_credentials(h: HWND, target: &str, caption: &str, message: &str) -> Result<Option<nw::Credentials>> {
+    let caption = w::wide(caption);
+    let message = w::wide(message);
+    let target = w::wide(target);
     let ui = CREDUI_INFOW {
         cbSize: size_of::<CREDUI_INFOW>() as u32,
         hwndParent: h,
@@ -1113,6 +1120,11 @@ impl Native {
         if mode == REPLAY_MODE {
             set(self.h(INTEL_IMPORT), "Replay JSONL");
         }
+        if mode == SECURE_MODE {
+            set(self.h(INTEL_ROUTER), "SNMPv3 GET");
+            set(self.h(INTEL_IMPORT), "TLS Syslog");
+            set(self.h(INTEL_HISTORY), "Histori aman");
+        }
         if mode == DHCP6_MODE || mode == DHCP6_HISTORY_MODE {
             set(self.h(INTEL_RECORD), "Simpan DHCPv6");
             set(self.h(INTEL_HISTORY), "Histori DHCPv6");
@@ -1231,6 +1243,12 @@ impl Native {
                 self.intel.alert_path = None;
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
+            }
+            Ok(IntelReply::SecureHistory(rows)) => {
+                self.intel.secure_history = rows;
+                select(self.h(INTEL_MODE), SECURE_MODE);
+                self.intel.mode = SECURE_MODE;
+                self.intel_mode_labels(SECURE_MODE);
             }
             Ok(IntelReply::FlowReplay(report)) => {
                 self.intel.flow_replay = Some(report);
@@ -1692,6 +1710,43 @@ impl Native {
                     })?;
                 }
             }
+            INTEL_ROUTER if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+                ni::secure_bridge::available()?;
+                let target: std::net::SocketAddr = get(self.h(INTEL_HOST)).parse().map_err(|_| "Gunakan IP:port SNMP eksplisit.")?;
+                if !ni::secure_monitor::valid_address(target) { return Err("Target SNMP tidak valid.".into()); }
+                if popup(self.hwnd, &format!("GET sysUpTime.0 authPriv ke {target}? Hanya perangkat yang diizinkan. Hasil ringkas disimpan lokal."), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) != IDYES { return Ok(()); }
+                let Some(auth) = ask_session_credentials(self.hwnd, &target.to_string(), "SNMPv3 autentikasi", "Username dan password autentikasi SHA-256. Tidak disimpan.")? else { return Ok(()); };
+                let Some(privacy) = ask_session_credentials(self.hwnd, &target.to_string(), "SNMPv3 privasi", "Username yang sama dan password privasi AES-128 yang berbeda.")? else { return Ok(()); };
+                let units = |v: &[u16]| v.iter().position(|&n| n == 0).unwrap_or(v.len());
+                if auth.user[..units(&auth.user)] != privacy.user[..units(&privacy.user)] { return Err("Username kedua dialog harus sama.".into()); }
+                // Serialize directly from UTF-16 into short-lived buffers. Wipe
+                // temporary password bytes on drop, including error paths.
+                let utf8 = |v: &[u16]| -> Result<ni::secure_bridge::SecretBytes> {
+                    let mut bytes = ni::secure_bridge::SecretBytes(Vec::new());
+                    for c in char::decode_utf16(v[..units(v)].iter().copied()) {
+                        let c = c.map_err(|_| "Kredensial UTF-16 tidak valid.")?;
+                        let mut buf = [0u8;4];
+                        bytes.0.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                        for b in &mut buf { unsafe { std::ptr::write_volatile(b,0); } }
+                    }
+                    Ok(bytes)
+                };
+                let user = utf8(&auth.user)?;
+                let ap = utf8(&auth.password)?;
+                let pp = utf8(&privacy.password)?;
+                let mut secret = ni::secure_bridge::SecretBytes(Vec::new());
+                use serde::Serialize;
+                #[derive(Serialize)]
+                struct Pipe<'a> { username: &'a str, auth_password: &'a str, privacy_password: &'a str }
+                fn as_text(b: &[u8]) -> &str { std::str::from_utf8(b).unwrap_or("") }
+                serde_json::to_writer(&mut secret.0, &Pipe { username: as_text(&user.0), auth_password: as_text(&ap.0), privacy_password: as_text(&pp.0) }).map_err(|_| "Serialisasi credential gagal.")?;
+                let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
+                self.start_intel(move || {
+                    let report = ni::secure_bridge::snmp(target, secret)?;
+                    ni::secure_monitor::append(&path, &report)?;
+                    Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
+                })?;
+            }
             INTEL_ROUTER if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 self.configure_polling()?
             }
@@ -1722,6 +1777,18 @@ impl Native {
                             .map(IntelReply::Router)
                     })?;
                 }
+            }
+            INTEL_IMPORT if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+                ni::secure_bridge::available()?;
+                let Some(config) = typed_file_dialog(self.hwnd,false,"","Konfigurasi TLS JSON (*.json)\0*.json\0","json")? else { return Ok(()); };
+                let expected = ni::secure_bridge::TlsConfig::read(&config)?;
+                if popup(self.hwnd,&format!("Terima satu koneksi mutual TLS pada {}? {} pin klien diotorisasi. Hanya ringkasan tersimpan; tidak membuka plaintext atau service permanen.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES { return Ok(()); }
+                let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
+                self.start_intel(move || {
+                    let report = ni::secure_bridge::tls(&config,&expected)?;
+                    ni::secure_monitor::append(&path,&report)?;
+                    Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
+                })?;
             }
             INTEL_IMPORT if selection(self.h(INTEL_MODE)) == REPLAY_MODE => {
                 if let Some(path) = typed_file_dialog(self.hwnd, false, "",
@@ -1812,6 +1879,10 @@ impl Native {
                 if let Some(collector) = self.intel.collector.take() {
                     self.start_intel(move || Ok(IntelReply::Stopped(Box::new(collector.stop()))))?;
                 }
+            }
+            INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+                let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
+                self.start_intel(move || Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?)))?;
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 let authority = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
@@ -2472,6 +2543,13 @@ impl Native {
                     );
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Simpan menampilkan overlap snapshot scope yang sama. Isi editor, Undo, backup dan Pulihkan salinan baru. Reset sebelum membuat key baru."
+            }
+            SECURE_MODE => {
+                for report in &self.intel.secure_history {
+                    push([report.label().into(), report.scope(), report.summary(), format!("UTC {}",report.stamp())],
+                        &|| format!("{}\n{}\n{}\nObservasi historis, bukan status online saat ini.",report.label(),report.scope(),report.summary()));
+                }
+                "Secure Transport: GET SNMPv3 atau TLS Syslog satu sesi. Histori hanya ringkasan tervalidasi. Build tanpa helper terverifikasi tidak mengaktifkan transport."
             }
             REPLAY_MODE => {
                 if let Some(report) = &self.intel.flow_replay {

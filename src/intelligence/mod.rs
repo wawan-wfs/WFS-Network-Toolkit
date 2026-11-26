@@ -27,6 +27,9 @@ pub mod router;
 pub mod router_history;
 pub mod store;
 pub mod syslog;
+pub mod secure_monitor;
+#[cfg(windows)]
+pub mod secure_bridge;
 pub mod visual;
 #[cfg(windows)]
 pub mod windows;

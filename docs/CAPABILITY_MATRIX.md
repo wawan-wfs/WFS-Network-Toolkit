@@ -1,3 +1,9 @@
+## Integrated P1 increment 11 — fail-closed native Secure Transport integration
+
+Added native mode 33 with explicit SNMP authPriv GET and one-session mutual TLS actions, session-only Windows credential prompts, typed result validation and independent bounded SQLite summary history. A build must explicitly embed WENET_SECURE_HELPER_SHA256 and install the matching helper in a protected application directory; ordinary builds remain disabled. Bridge launches no shell, passes credentials through stdin, checks result identity/time and uses process deadlines. TLS report includes bind and observation timestamp. This is source integration only: root and companion uncompiled; helper packaging, ACL/TOCTOU security acceptance, dependency resolution and real agent tests pending. Continuous collector, full redesign and benchmark remain outstanding. No CI/deployment triggered.
+
+---
+
 ## Integrated P1 increment 10 — executable security acceptance harnesses
 
 Added TLS loopback fixture harness generating ephemeral trusted and foreign CA, server and client certs via OpenSSL. Runs seven actual cases against companion executable (authorized, absent cert, foreign CA, same CA unpinned, plaintext, truncated and invalid length). Added explicit authorized SNMPv3 lab harness: valid authPriv, wrong auth, wrong privacy and wrong user, no credentials persisted in report. Harness code committed; NOT RUN because companion executable cannot be compiled in current environment. Dependency lock, adversarial replay/source/downgrade, expiry and slow-peer cases, continuous collector and full UI/runtime acceptance remain blockers.
