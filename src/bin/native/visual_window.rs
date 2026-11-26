@@ -191,7 +191,7 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
     vis_text(
         dc,
         vis_rect(18, 30, width - 36, 18),
-        "← → / roda mouse: bukti   W A S D / drag kanan: pan   + / −: zoom   Esc: tutup",
+        "← → / roda mouse: bukti   W A S D / drag kanan: pan   + / −: zoom   F: fokus   Esc: tutup",
         color(210, 228, 230),
         false,
     );
@@ -232,7 +232,9 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                     unsafe {
                         IntersectClipRect(dc, 8, 83, width - 8, height - 118);
                     }
-                    for link in &graph.links {
+                    let bands = graph.visible_bands(viewport, 83 - 88, height - 118 - 88);
+                    for &id in bands.iter().flat_map(|band| band.links.iter()) {
+                        let link = &graph.links[id];
                         let a = &graph.nodes[link.from];
                         let b = &graph.nodes[link.to];
                         let p = point(
@@ -263,7 +265,8 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                             },
                         );
                     }
-                    for node in &graph.nodes {
+                    for &id in bands.iter().flat_map(|band| band.nodes.iter()) {
+                        let node = &graph.nodes[id];
                         let (x, y) = point(node.x, node.y);
                         if x + nw < 8 || x > width || y + nh < 83 || y > height - 118 {
                             continue;
@@ -426,7 +429,40 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if !dc.is_null() {
                 VISUAL_STATE.with(|slot| {
                     if let Some(state) = slot.borrow().as_ref() {
-                        visual_paint(h, dc, state);
+                        // Bound the offscreen allocation; retain direct painting
+                        // if the display is huge or GDI resources are exhausted.
+                        let mut rect = RECT::default();
+                        unsafe { GetClientRect(h, &mut rect); }
+                        let (width, height) = (rect.right, rect.bottom);
+                        let memory = if width > 0 && height > 0
+                            && i64::from(width) * i64::from(height) <= 16_000_000
+                        {
+                            unsafe { CreateCompatibleDC(dc) }
+                        } else {
+                            null_mut()
+                        };
+                        if memory.is_null() {
+                            visual_paint(h, dc, state);
+                        } else {
+                            let bitmap = unsafe { CreateCompatibleBitmap(dc, width, height) };
+                            if bitmap.is_null() {
+                                visual_paint(h, dc, state);
+                            } else {
+                                let old = unsafe { SelectObject(memory, bitmap) };
+                                if old.is_null() {
+                                    visual_paint(h, dc, state);
+                                } else {
+                                    visual_paint(h, memory, state);
+                                    let ok = unsafe { BitBlt(dc, 0, 0, width, height, memory, 0, 0, SRCCOPY) };
+                                    if ok == 0 {
+                                        visual_paint(h, dc, state);
+                                    }
+                                    unsafe { SelectObject(memory, old); }
+                                }
+                                unsafe { DeleteObject(bitmap); }
+                            }
+                            unsafe { DeleteDC(memory); }
+                        }
                     }
                 });
             }
@@ -466,6 +502,20 @@ unsafe extern "system" fn visual_wnd(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         (WM_KEYDOWN, 0x41) => state.viewport.pan(100, 0),
                         (WM_KEYDOWN, 0x44) => state.viewport.pan(-100, 0),
                         (WM_KEYDOWN, 0x52) => state.viewport = ni::graph::Viewport::default(),
+                        (WM_KEYDOWN, 0x46) => {
+                            if let Some(graph) = &state.graph
+                                && let Some(link) = graph.links.get(state.selected)
+                            {
+                                let mut client = RECT::default();
+                                unsafe { GetClientRect(h, &mut client); }
+                                let a = &graph.nodes[link.from];
+                                let b = &graph.nodes[link.to];
+                                let x = (a.x + b.x + ni::graph::NODE_WIDTH) / 2;
+                                let y = (a.y + b.y + ni::graph::NODE_HEIGHT) / 2;
+                                let (px, py) = state.viewport.project(x, y);
+                                state.viewport.pan(client.right / 2 - 20 - px, (client.bottom - 35) / 2 - 88 - py);
+                            }
+                        }
                         (WM_KEYDOWN, 0x6b | 0xbb) => state.zoom(true),
                         (WM_KEYDOWN, 0x6d | 0xbd) => state.zoom(false),
                         (WM_MOUSEWHEEL, _) => {

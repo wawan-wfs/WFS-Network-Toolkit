@@ -34,6 +34,16 @@ pub struct Link {
     pub evidence: usize,
 }
 
+/// Vertical connected-component index. All links lie entirely inside their
+/// own component band, so skipping an offscreen band cannot hide a crossing.
+#[derive(Debug)]
+pub struct Band {
+    pub top: i32,
+    pub bottom: i32,
+    pub nodes: Vec<usize>,
+    pub links: Vec<usize>,
+}
+
 #[derive(Default)]
 pub struct Graph {
     pub nodes: Vec<Node>,
@@ -41,6 +51,7 @@ pub struct Graph {
     pub limited: bool,
     pub height: i32,
     pub components: usize,
+    bands: Vec<Band>,
 }
 
 fn column(kind: &str) -> usize {
@@ -141,16 +152,33 @@ impl Graph {
             }
             members.sort_unstable();
             let mut counts = [0i32; COLUMNS];
-            for id in members {
+            let mut band_links = Vec::new();
+            for &id in &members {
                 let node = &mut self.nodes[id];
                 let col = column(node.kind);
                 node.x = col as i32 * COLUMN_WIDTH;
                 node.y = top + counts[col] * ROW_HEIGHT;
                 counts[col] += 1;
                 self.height = self.height.max(node.y + NODE_HEIGHT);
+                band_links.extend_from_slice(&node.incident);
             }
-            top += counts.into_iter().max().unwrap_or(0) * ROW_HEIGHT + 24;
+            let bottom = top + (counts.into_iter().max().unwrap_or(1) - 1) * ROW_HEIGHT + NODE_HEIGHT;
+            band_links.sort_unstable();
+            band_links.dedup();
+            self.bands.push(Band { top, bottom, nodes: members, links: band_links });
+            top = bottom + (ROW_HEIGHT - NODE_HEIGHT) + 24;
         }
+    }
+
+    /// Binary search the visible vertical band interval; no per-frame scan
+    /// of disconnected components. The caller still clips individual edges.
+    pub fn visible_bands(&self, viewport: Viewport, top: i32, bottom: i32) -> &[Band] {
+        if bottom < top {
+            return &[];
+        }
+        let first = self.bands.partition_point(|band| viewport.project(0, band.bottom).1 < top);
+        let end = self.bands.partition_point(|band| viewport.project(0, band.top).1 <= bottom);
+        &self.bands[first..end.max(first)]
     }
 
     pub fn width(&self) -> i32 {
@@ -193,11 +221,14 @@ impl Viewport {
     }
 
     pub fn hit(self, graph: &Graph, x: i32, y: i32) -> Option<usize> {
-        graph.nodes.iter().enumerate().rev().find_map(|(id, node)| {
-            let (left, top) = self.project(node.x, node.y);
-            let (right, bottom) = self.project(node.x + NODE_WIDTH, node.y + NODE_HEIGHT);
-            (x >= left && x < right && y >= top && y < bottom).then_some(id)
-        })
+        graph.visible_bands(self, y, y).iter().rev()
+            .flat_map(|band| band.nodes.iter().rev())
+            .find_map(|&id| {
+                let node = &graph.nodes[id];
+                let (left, top) = self.project(node.x, node.y);
+                let (right, bottom) = self.project(node.x + NODE_WIDTH, node.y + NODE_HEIGHT);
+                (x >= left && x < right && y >= top && y < bottom).then_some(id)
+            })
     }
 }
 
@@ -249,6 +280,33 @@ mod tests {
         assert_eq!(graph.links[0].from, graph.links[2].from);
         assert!(graph.nodes[graph.links[1].from].y > graph.nodes[graph.links[2].to].y);
         assert_eq!(Graph::build(&[]).components, 0);
+    }
+
+    #[test]
+    fn band_index_matches_brute_force_and_never_drops_crossing_links() {
+        let edges: Vec<_> = (0..MAX_EDGES).map(|i| edge(&format!("r{i}"), "br", "ether1", "blue")).collect();
+        let graph = Graph::build(&edges);
+        assert_eq!(graph.components, MAX_EDGES);
+        let mut viewport = Viewport::default();
+        for scale in [40, 100, 200] {
+            viewport.zoom(scale);
+            for pan in [0, -600, -15000, -40000] {
+                viewport.pan_y = pan;
+                let bands = graph.visible_bands(viewport, 0, 480);
+                let expected: Vec<_> = graph.bands.iter().filter(|band| {
+                    viewport.project(0, band.bottom).1 >= 0 && viewport.project(0, band.top).1 <= 480
+                }).map(|b| b.top).collect();
+                assert_eq!(bands.iter().map(|b| b.top).collect::<Vec<_>>(), expected);
+                assert!(bands.len() < 20);
+                for band in bands {
+                    for &link in &band.links {
+                        assert!(band.nodes.contains(&graph.links[link].from));
+                        assert!(band.nodes.contains(&graph.links[link].to));
+                    }
+                }
+            }
+        }
+        assert!(graph.visible_bands(viewport, 10, 0).is_empty());
     }
 
     #[test]

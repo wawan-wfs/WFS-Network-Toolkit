@@ -53,7 +53,8 @@ const DHCP6_MODE: usize = 27;
 const NOTES_MODE: usize = 28;
 const DHCP6_HISTORY_MODE: usize = 29;
 const SYSLOG_MODE: usize = 30;
-const INTEL_MODES: [&str; 31] = [
+const REPLAY_MODE: usize = 31;
+const INTEL_MODES: [&str; 32] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -85,6 +86,7 @@ const INTEL_MODES: [&str; 31] = [
     "IPAM metadata lokal",
     "Histori DHCPv6 / PD",
     "Syslog offline",
+    "Replay Flow offline",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -112,6 +114,7 @@ enum IntelReply {
     IpamNotes(Vec<ni::ipam_notes::Note>, bool),
     Dhcp6History(String, Vec<ni::dhcp6_history::Capture>),
     Syslog(ni::syslog::Summary),
+    FlowReplay(ni::flow_replay::Report),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -174,6 +177,7 @@ struct IntelState {
     visible_subnet_keys: Vec<Option<(String, String)>>,
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
+    flow_replay: Option<ni::flow_replay::Report>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -1106,6 +1110,9 @@ impl Native {
         if mode == SYSLOG_MODE {
             set(self.h(INTEL_IMPORT), "Impor Syslog");
         }
+        if mode == REPLAY_MODE {
+            set(self.h(INTEL_IMPORT), "Replay JSONL");
+        }
         if mode == DHCP6_MODE || mode == DHCP6_HISTORY_MODE {
             set(self.h(INTEL_RECORD), "Simpan DHCPv6");
             set(self.h(INTEL_HISTORY), "Histori DHCPv6");
@@ -1224,6 +1231,12 @@ impl Native {
                 self.intel.alert_path = None;
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
+            }
+            Ok(IntelReply::FlowReplay(report)) => {
+                self.intel.flow_replay = Some(report);
+                select(self.h(INTEL_MODE), REPLAY_MODE);
+                self.intel.mode = REPLAY_MODE;
+                self.intel_mode_labels(REPLAY_MODE);
             }
             Ok(IntelReply::Syslog(summary)) => {
                 self.intel.syslog_summary = Some(summary);
@@ -1710,16 +1723,30 @@ impl Native {
                     })?;
                 }
             }
+            INTEL_IMPORT if selection(self.h(INTEL_MODE)) == REPLAY_MODE => {
+                if let Some(path) = typed_file_dialog(self.hwnd, false, "",
+                    "Datagram JSONL (*.jsonl)\0*.jsonl\0", "jsonl")?
+                {
+                    self.intel.flow_replay = None;
+                    self.start_intel(move || ni::flow_replay::read(&path).map(IntelReply::FlowReplay))?;
+                    self.render_intel();
+                }
+            }
             INTEL_IMPORT if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => {
                 if let Some(path) = typed_file_dialog(
                     self.hwnd,
                     false,
                     "",
-                    "Syslog (*.log;*.txt)\0*.log;*.txt\0",
+                    "Syslog (*.log;*.txt;*.bin)\0*.log;*.txt;*.bin\0",
                     "",
                 )? {
                     self.intel.syslog_summary = None;
-                    self.start_intel(move || ni::syslog::read(&path).map(IntelReply::Syslog))?;
+                    let framed = path.extension().and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("bin"));
+                    self.start_intel(move || {
+                        if framed { ni::syslog::read_octet_counted(&path) } else { ni::syslog::read(&path) }
+                            .map(IntelReply::Syslog)
+                    })?;
                     self.render_intel();
                 }
             }
@@ -2446,6 +2473,28 @@ impl Native {
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Simpan menampilkan overlap snapshot scope yang sama. Isi editor, Undo, backup dan Pulihkan salinan baru. Reset sebelum membuat key baru."
             }
+            REPLAY_MODE => {
+                if let Some(report) = &self.intel.flow_replay {
+                    for (name, count, explanation) in [
+                        ("Datagram", report.datagrams as u64, "Frame JSONL yang diproses"),
+                        ("Record", report.decoded_records as u64, "Record dengan pasangan alamat valid"),
+                        ("Invalid", report.invalid as u64, "Datagram ditolak decoder"),
+                        ("Duplikat", report.duplicates as u64, "Identitas datagram berulang"),
+                        ("Template hilang", report.missing_templates, "Set tanpa template yang berlaku"),
+                        ("Skipped", report.skipped, "Set/record tidak diinterpretasikan"),
+                        ("Sequence berulang", report.repeated_sequence as u64, "Bukan estimasi loss"),
+                        ("Reorder", report.reordered_sequence as u64, "Export sequence/waktu tidak maju"),
+                        ("Restart", report.generation_restarts as u64, "Indikasi restart v9"),
+                        ("Options record", report.options_records, "Options IPFIX yang diperiksa"),
+                        ("Sampling", report.sampling_fields as u64, "Metadata terlapor, tanpa scaling"),
+                        ("NAT", report.nat_fields as u64, "Field post-observation terlapor"),
+                    ] {
+                        push([name.into(), "Replay offline".into(), count.to_string(), explanation.into()],
+                            &|| format!("{name}: {count}\n{explanation}. Tidak mengirim datagram atau mengubah arsip."));
+                    }
+                }
+                "Pilih Replay JSONL untuk diagnostik decoder lokal. Tidak membuka socket, tidak menyimpan arsip, tidak membuktikan reachability."
+            }
             SYSLOG_MODE => {
                 if let Some(summary) = &self.intel.syslog_summary {
                     push(
@@ -2483,7 +2532,7 @@ impl Native {
                     }
                     "Ringkasan Syslog offline. Tidak membuktikan pengirim atau insiden; tidak ada listener jaringan. Detail memperlihatkan jumlah ditolak."
                 } else {
-                    "Impor Syslog: pilih file UTF-8 lokal (maksimal 1 MiB / 10.000 baris). Hanya facility/severity disimpan dalam sesi."
+                    "Impor Syslog: .log/.txt UTF-8 atau .bin octet-counted (maksimal 1 MiB / 10.000 frame). Hanya facility/severity disimpan. Tidak ada autentikasi TLS."
                 }
             }
             DHCP6_HISTORY_MODE => {

@@ -75,32 +75,55 @@ pub fn summarize(bytes: &[u8]) -> Result<Summary> {
 /// RFC 5425 octet-counting frame parser. This function is transport-agnostic:
 /// neither a successful parse nor the Syslog header proves sender authentication.
 /// A future TLS receiver must verify the peer before invoking this routine.
-pub fn summarize_octet_counted(mut input: &[u8]) -> Result<Summary> {
-    if input.len() > MAX_BYTES {
-        return Err("Stream Syslog melewati batas 1 MiB.".into());
-    }
+pub fn summarize_octet_counted(input: &[u8]) -> Result<Summary> {
+    read_framed(input)
+}
+
+/// Incremental octet-counted reader. The caller supplies a bounded transport
+/// and its own deadline; no assumption of TLS or authentication is made here.
+/// One frame is buffered at a time, and truncation never publishes a summary.
+pub fn read_framed(reader: impl Read) -> Result<Summary> {
+    use std::io::{BufReader, ErrorKind};
+    let mut reader = BufReader::new(reader.take(MAX_BYTES as u64 + 1));
     let mut out = Summary::default();
-    let mut frames = 0;
-    while !input.is_empty() {
-        frames += 1;
-        if frames > MAX_LINES {
-            return Err("Jumlah frame Syslog melewati batas.".into());
+    let mut total = 0usize;
+    let mut frame = Vec::with_capacity(MAX_LINE);
+    let mut byte = [0u8; 1];
+    loop {
+        match reader.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("Baca framing Syslog: {e}")),
         }
-        let separator = input.iter().take(6).position(|&b| b == b' ')
-            .ok_or("Panjang frame Syslog tidak valid.")?;
-        let prefix = &input[..separator];
-        if prefix.is_empty() || prefix[0] == b'0' || !prefix.iter().all(u8::is_ascii_digit) {
-            return Err("Prefix frame Syslog tidak kanonik.".into());
+        total += 1;
+        if total > MAX_BYTES || !matches!(byte[0], b'1'..=b'9') {
+            return Err("Prefix frame Syslog tidak kanonik atau batas byte tercapai.".into());
         }
-        let len = std::str::from_utf8(prefix).map_err(|_| "Panjang frame tidak valid.")?
-            .parse::<usize>().map_err(|_| "Panjang frame tidak valid.")?;
-        input = &input[separator + 1..];
-        if len == 0 || len > MAX_LINE || len > input.len() {
-            return Err("Frame Syslog terlalu panjang atau terpotong.".into());
+        let mut len = usize::from(byte[0] - b'0');
+        let mut digits = 1;
+        loop {
+            reader.read_exact(&mut byte).map_err(|_| "Prefix frame Syslog terpotong.")?;
+            total += 1;
+            if total > MAX_BYTES {
+                return Err("Batas byte Syslog tercapai.".into());
+            }
+            if byte[0] == b' ' {
+                break;
+            }
+            digits += 1;
+            if digits > 4 || !byte[0].is_ascii_digit() {
+                return Err("Panjang frame Syslog tidak valid.".into());
+            }
+            len = len * 10 + usize::from(byte[0] - b'0');
         }
-        let (frame, rest) = input.split_at(len);
-        input = rest;
-        let group = std::str::from_utf8(frame).ok()
+        if len > MAX_LINE || total + len > MAX_BYTES || out.accepted + out.rejected >= MAX_LINES {
+            return Err("Batas ukuran atau jumlah frame Syslog tercapai.".into());
+        }
+        frame.resize(len, 0);
+        reader.read_exact(&mut frame).map_err(|_| "Frame Syslog terpotong.")?;
+        total += len;
+        let group = std::str::from_utf8(&frame).ok()
             .filter(|s| !s.chars().any(|c| c.is_control() && c != '\t'))
             .and_then(priority);
         if let Some(group) = group {
@@ -113,10 +136,8 @@ pub fn summarize_octet_counted(mut input: &[u8]) -> Result<Summary> {
     Ok(out)
 }
 pub fn read_octet_counted(path: &Path) -> Result<Summary> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path).map_err(|e| e.to_string())?
-        .take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    summarize_octet_counted(&bytes)
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    read_framed(file)
 }
 
 pub fn read(path: &Path) -> Result<Summary> {
@@ -156,6 +177,27 @@ mod tests {
         for invalid in ["0 ", "01 x", "99999 x", "4 abc", "+1 x", "2", "1 xtrailing"] {
             assert!(summarize_octet_counted(invalid.as_bytes()).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn fragmented_stream_has_same_result_and_rejects_truncated_tail() {
+        struct Fragmented<'a>(&'a [u8]);
+        impl Read for Fragmented<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if out.is_empty() || self.0.is_empty() { return Ok(0); }
+                out[0] = self.0[0];
+                self.0 = &self.0[1..];
+                Ok(1)
+            }
+        }
+        let a = "<13>message";
+        let b = "<14>second";
+        let bytes = format!("{} {a}{} {b}", a.len(), b.len());
+        let normal = summarize_octet_counted(bytes.as_bytes()).unwrap();
+        let split = read_framed(Fragmented(bytes.as_bytes())).unwrap();
+        assert_eq!(normal.groups, split.groups);
+        assert_eq!(normal.accepted, split.accepted);
+        assert!(read_framed(Fragmented(&bytes.as_bytes()[..bytes.len() - 1])).is_err());
     }
 
     #[test]

@@ -1008,7 +1008,7 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
-                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SYSLOG_MODE => {
+                INTEL_RECORD | INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), SYSLOG_MODE | REPLAY_MODE) => {
                     false
                 }
                 INTEL_RECORD
