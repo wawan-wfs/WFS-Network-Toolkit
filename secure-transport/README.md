@@ -19,3 +19,9 @@ wenet-secure-transport syslog-tls-once config.json --confirm
 Configuration keys: bind (explicit local IP:port), server_chain (PEM path), server_key (unencrypted PEM key path protected by OS ACL), client_ca (PEM trusted roots), allowed_client_sha256 (1–32 lowercase exact DER leaf SHA-256 fingerprints). Generate pins from the DER bytes of each authorized client cert; verify through an independent trusted channel. No wildcard bind, no anonymous peer, no plaintext, no early data, no automatic client trust, no resume. TLS 1.2/1.3 only. One connection and bounded accept/handshake/read deadline, octet-counted input up to 1 MiB, no raw messages stored. Close the TLS session normally after sending data. CA validity and peer pin are both required. No CRL provisioning, automatic certificate rotation, continuous listener, or desktop integration yet.
 
 Protocol/library references: https://docs.rs/async-snmp/0.18.1/async_snmp/ ; https://docs.rs/rustls/0.23.46/rustls/server/struct.WebPkiClientVerifier.html ; https://docs.rs/rustls-pemfile/2.2.0/rustls_pemfile/ .
+
+## Executable acceptance harnesses
+
+- TLS (requires openssl and Python): python tests/tls_interop.py --exe target/release/wenet-secure-transport.exe --report tls-report.json . Generates temporary certificates and runs actual loopback connections, seven positive/negative cases; no repository keys. On Linux use the executable without .exe.
+- SNMP (authorized real lab agent only): python tests/snmp_lab.py --exe target/release/wenet-secure-transport.exe --target <IP:port> --report snmp-report.json --confirm-authorized-lab . Credentials must arrive from a protected nonterminal stdin pipe. Four actual tests, correct authPriv, wrong auth, wrong privacy, wrong user. No credential echo in evidence. Spoof/replay/downgrade/expired certificate/slow peer and continuous load acceptance still required.
+- Both harnesses are unexecuted until companion build succeeds; never claim PASS from source fixtures.
