@@ -91,6 +91,15 @@ impl Series {
         )
     }
 
+    pub fn p95(points: &[Point], rx: bool) -> Option<u64> {
+        let mut values: Vec<u64> = points.iter().filter_map(|p| if rx { p.rx_bps } else { p.tx_bps }).collect();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_unstable();
+        Some(values[(values.len() * 95).div_ceil(100) - 1])
+    }
+
     pub fn max_value(points: &[Point]) -> u64 {
         points
             .iter()
@@ -131,6 +140,9 @@ mod tests {
         assert_eq!(tail[0].rx_bps, None);
         assert_eq!(tail[1].rx_bps, Some(0));
         assert_eq!(series.preview(2), ("?·".into(), "██".into()));
+        assert_eq!(Series::p95(tail, true), Some(0));
+        assert_eq!(Series::p95(tail, false), Some(u64::MAX));
+        assert_eq!(Series::p95(&[], true), None);
         assert_eq!(Series::max_value(tail), u64::MAX);
         assert_eq!(Series::axis(u64::MAX, u64::MAX, 200), 200);
         assert!(series.range(0, 30).is_empty());

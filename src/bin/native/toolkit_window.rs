@@ -1039,6 +1039,7 @@ impl Native {
                             TOPOLOGY_MODE => !self.intel.visual_edges.is_empty(),
                             TREND_MODE => !self.intel.visual_series.is_empty(),
                             NOTES_MODE => !self.intel.visible_notes.is_empty(),
+                            SUBNET_MODE => self.intel.visible_subnet_keys.iter().any(Option::is_some),
                             DEVICE_MODE => self
                                 .intel
                                 .device
@@ -1052,6 +1053,7 @@ impl Native {
                     normal
                         && match selection(self.h(INTEL_MODE)) {
                             ARCHIVE_MODE => self.intel.archived.as_ref().is_some_and(|p| p.next.is_some()),
+                            DASHBOARD_MODE => !self.intel.dashboard_charts.is_empty(),
                             DHCP6_HISTORY_MODE => self.intel.dhcp6_history.as_ref()
                                 .is_some_and(|(_, rows)| rows.len() == 20),
                             _ => false,

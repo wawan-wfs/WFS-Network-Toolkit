@@ -171,6 +171,7 @@ struct IntelState {
     visual_series: Vec<ni::visual::Series>,
     ipam_notes: Vec<ni::ipam_notes::Note>,
     visible_notes: Vec<ni::ipam_notes::Note>,
+    visible_subnet_keys: Vec<Option<(String, String)>>,
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
 }
@@ -1097,9 +1098,11 @@ impl Native {
                 TOPOLOGY_MODE => "Graf bukti",
                 TREND_MODE => "Grafik",
                 NOTES_MODE => "Isi editor",
+                SUBNET_MODE => "Metadata IPAM",
                 _ => "Detail IP",
             },
         );
+        set(self.h(INTEL_MORE), if mode == DASHBOARD_MODE { "Rentang" } else { "Lanjut" });
         if mode == SYSLOG_MODE {
             set(self.h(INTEL_IMPORT), "Impor Syslog");
         }
@@ -1523,6 +1526,15 @@ impl Native {
                     }
                 }
             }
+            INTEL_MORE if selection(self.h(INTEL_MODE)) == DASHBOARD_MODE => {
+                let span = DASHBOARD_SPAN.with(|value| {
+                    let next = match value.get() { 30 => 60, 60 => 120, _ => 30 };
+                    value.set(next);
+                    next
+                });
+                self.set_notice(&format!("Rentang chart: {span} sampel terbaru."));
+                unsafe { InvalidateRect(self.h(INTEL_CHART), null(), 0); }
+            }
             INTEL_MORE if selection(self.h(INTEL_MODE)) == DHCP6_HISTORY_MODE => {
                 self.load_older_dhcp6_history()?;
             }
@@ -1548,6 +1560,16 @@ impl Native {
                 let index = self
                     .selected_intel_row()
                     .ok_or("Pilih satu baris terlebih dahulu.")?;
+                if mode == SUBNET_MODE {
+                    let (scope, prefix) = self.intel.visible_subnet_keys.get(index)
+                        .and_then(Option::as_ref).cloned()
+                        .ok_or("Scope teramati belum terbukti; gunakan metadata manual secara eksplisit.")?;
+                    select(self.h(INTEL_MODE), NOTES_MODE);
+                    self.intel_action(INTEL_MODE)?;
+                    set(self.h(INTEL_FILTER), &format!("{scope}|{prefix}|label|||"));
+                    self.set_notice("Draft metadata scope terverifikasi. Tinjau lalu Simpan; tidak mengubah router.");
+                    return Ok(());
+                }
                 if mode == NOTES_MODE {
                     let note = self
                         .intel
@@ -2087,6 +2109,7 @@ impl Native {
         let mut visual_edges = Vec::new();
         let mut visual_series = Vec::new();
         let mut visible_notes = Vec::new();
+        let mut visible_subnet_keys = Vec::new();
         let description = match mode {
             DASHBOARD_MODE => {
                 let mut row = |values: [String; 4],
@@ -2562,23 +2585,25 @@ impl Native {
                 groups.extend(self.intel.routers.values().map(|s| network_map::subnets(s)));
                 let limited = groups.iter().any(|g| g.limited);
                 for r in groups.iter().flat_map(|g| &g.rows) {
+                    let values = [
+                        r.prefix.to_string(),
+                        r.scope.clone(),
+                        format!("{} konfigurasi · {} IP teramati", r.configured, r.observed),
+                        if r.partial { "Cakupan parsial" } else { "Snapshot sumber" }.into(),
+                    ];
+                    if visible_subnet_keys.len() < INTEL_ROW_LIMIT
+                        && search.matches(&values.each_ref().map(String::as_str))
+                    {
+                        visible_subnet_keys.push(r.operator_scope.as_ref().map(|key| (key.clone(), r.prefix.to_string())));
+                    }
                     push(
-                        [
-                            r.prefix.to_string(),
-                            r.scope.clone(),
-                            format!("{} konfigurasi · {} IP teramati", r.configured, r.observed),
-                            if r.partial {
-                                "Cakupan parsial"
-                            } else {
-                                "Snapshot sumber"
-                            }
-                            .into(),
-                        ],
+                        values,
                         &|| {
                             format!(
-                                "Subnet {} · {}\n{} alamat dalam prefix (termasuk alamat khusus). {} konfigurasi interface; {} IP unik teramati pada scope. UTC {}. Tidak teramati ≠ bebas. Tidak ada pemindaian atau reservasi otomatis. Prefix bertumpang tindih tidak dijumlahkan.",
+                                "Subnet {} · {}\nScope metadata: {}\n{} alamat dalam prefix (termasuk alamat khusus). {} konfigurasi interface; {} IP unik teramati pada scope. UTC {}. Tidak teramati ≠ bebas. Tidak ada pemindaian atau reservasi otomatis. Prefix bertumpang tindih tidak dijumlahkan.",
                                 r.prefix,
                                 r.scope,
+                                r.operator_scope.as_deref().unwrap_or("tidak tersedia; scope belum terbukti"),
                                 r.prefix.cardinality(),
                                 r.configured,
                                 r.observed,
@@ -3709,7 +3734,7 @@ impl Native {
         unsafe {
             ShowWindow(
                 self.h(INTEL_MORE),
-                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE) {
+                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE | DASHBOARD_MODE) {
                     SW_SHOW
                 } else {
                     SW_HIDE
@@ -3721,7 +3746,7 @@ impl Native {
                 INTEL_IP_JOURNEY,
                 matches!(
                     mode,
-                    0 | 1 | DEVICE_MODE | DASHBOARD_MODE | TOPOLOGY_MODE | TREND_MODE | NOTES_MODE
+                    0 | 1 | DEVICE_MODE | DASHBOARD_MODE | TOPOLOGY_MODE | TREND_MODE | NOTES_MODE | SUBNET_MODE
                 ),
             ),
             (
@@ -3774,6 +3799,7 @@ impl Native {
         self.intel.visual_edges = visual_edges;
         self.intel.visual_series = visual_series;
         self.intel.visible_notes = visible_notes;
+        self.intel.visible_subnet_keys = visible_subnet_keys;
         set(
             self.h(INTEL_STATUS),
             &format!(

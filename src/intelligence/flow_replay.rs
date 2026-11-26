@@ -76,13 +76,13 @@ pub fn replay(bytes: &[u8]) -> Result<Report> {
         report.datagrams += 1;
         match decoder.ingest(frame.exporter, &packet, frame.received_utc) {
             Ok(batch) => {
-                report.duplicates += usize::from(batch.duplicate);
+                report.duplicates += batch.duplicate as usize;
                 report.decoded_records += batch.flows.len();
                 report.missing_templates += u64::from(batch.missing);
                 report.skipped += u64::from(batch.skipped);
-                report.repeated_sequence += usize::from(batch.sequence_repeated);
-                report.reordered_sequence += usize::from(batch.sequence_reordered);
-                report.generation_restarts += usize::from(batch.generation_restart);
+                report.repeated_sequence += batch.sequence_repeated as usize;
+                report.reordered_sequence += batch.sequence_reordered as usize;
+                report.generation_restarts += batch.generation_restart as usize;
                 report.sampling_fields += batch.provenance.iter().filter(|p| p.has_sampling()).count();
                 report.nat_fields += batch.provenance.iter().filter(|p| p.has_nat()).count();
             }

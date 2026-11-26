@@ -584,7 +584,14 @@ pub fn subnets(s: &RouterSnapshot) -> super::overview::Subnets {
             || !aligned(arp, stamp)
             || !aligned(leases, stamp)
             || !aligned(servers, stamp);
-        index.configure(r.value.clone(), label, ip, bits, stamp, partial);
+        let operator_scope = if vrf_known {
+            scope.vrf.get(r.value.as_str()).copied().flatten().and_then(|vrf| {
+                super::overview::router_operator_scope(&s.authority, &r.value, vrf)
+            })
+        } else {
+            None
+        };
+        index.configure(r.value.clone(), (label, operator_scope), ip, bits, stamp, partial);
         index.observe(r.value.clone(), ip);
     }
     for h in &s.inventory {

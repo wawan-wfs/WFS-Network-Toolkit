@@ -73,10 +73,30 @@ pub fn coverage(rows: &[Coverage], now: u64) -> CoverageSummary {
     out
 }
 
+/// Stable opaque key for a known, explicitly evidenced RouterOS scope.
+/// Length-delimited fields avoid collisions from display-label delimiters.
+pub fn router_operator_scope(authority: &str, interface: &str, vrf: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if super::router::Authority::parse(authority).ok()?.display() != authority
+        || interface.is_empty() || vrf.is_empty()
+    {
+        return None;
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"wenet-router-ipam-scope-v1");
+    for value in [authority, interface, vrf] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Some(format!("scope:v1:{hex}"))
+}
+
 #[derive(Clone, Debug)]
 pub struct SubnetRow {
     pub scope: String,
     pub prefix: Prefix,
+    pub operator_scope: Option<String>,
     pub configured: usize,
     pub observed: usize,
     pub observed_at: u64,
@@ -89,7 +109,7 @@ pub struct Subnets {
 }
 /// Scope keys are typed by the caller; never merge interface indexes or VRFs
 /// merely because two subnets have the same prefix.
-type PrefixData = (String, BTreeSet<IpAddr>, u64, bool);
+type PrefixData = (String, BTreeSet<IpAddr>, u64, bool, Option<String>);
 
 pub(crate) struct Index<K: Ord> {
     prefixes: BTreeMap<(K, Prefix), PrefixData>,
@@ -109,7 +129,7 @@ impl<K: Ord> Index<K> {
     pub(crate) fn configure(
         &mut self,
         key: K,
-        label: String,
+        scope: (String, Option<String>),
         ip: IpAddr,
         bits: u8,
         stamp: u64,
@@ -123,10 +143,14 @@ impl<K: Ord> Index<K> {
             self.limited = true;
             return;
         }
+        let (label, operator_scope) = scope;
         let row = self
             .prefixes
             .entry(entry)
-            .or_insert_with(|| (label, BTreeSet::new(), stamp, partial));
+            .or_insert_with(|| (label, BTreeSet::new(), stamp, partial, operator_scope.clone()));
+        if row.4 != operator_scope {
+            row.4 = None;
+        }
         row.1.insert(ip);
         row.2 = row.2.min(stamp);
         row.3 |= partial;
@@ -147,7 +171,7 @@ impl<K: Ord> Index<K> {
             .prefixes
             .into_iter()
             .map(
-                |((key, prefix), (scope, configured, observed_at, partial))| {
+                |((key, prefix), (scope, configured, observed_at, partial, operator_scope))| {
                     let count = observed.get(&key).map_or(0, |ips| {
                         let lo = ips.partition_point(|ip| *ip < prefix.network);
                         let end = prefix.end();
@@ -157,6 +181,7 @@ impl<K: Ord> Index<K> {
                     SubnetRow {
                         scope,
                         prefix,
+                        operator_scope,
                         configured: configured.len(),
                         observed: count,
                         observed_at,
@@ -184,7 +209,7 @@ pub fn local_subnets(s: &LocalSnapshot) -> Subnets {
         }
         index.configure(
             a.interface_index,
-            format!("Windows / if#{}", a.interface_index),
+            (format!("Windows / if#{}", a.interface_index), None),
             a.ip,
             a.prefix,
             s.observed_at,
@@ -228,11 +253,23 @@ mod tests {
     }
 
     #[test]
+    fn operator_key_requires_exact_authority_and_separates_vrf_and_interface() {
+        let a = router_operator_scope("r1.test:443", "ether1", "blue").unwrap();
+        assert_eq!(a.len(), 73);
+        assert_eq!(Some(a.clone()), router_operator_scope("r1.test:443", "ether1", "blue"));
+        assert_ne!(Some(a.clone()), router_operator_scope("r1.test:443", "ether1", "red"));
+        assert_ne!(Some(a.clone()), router_operator_scope("r2.test:443", "ether1", "blue"));
+        assert_ne!(Some(a), router_operator_scope("r1.test:443", "ether2", "blue"));
+        assert!(router_operator_scope("r1.test", "ether1", "blue").is_none());
+        assert!(router_operator_scope("r1.test:443", "", "blue").is_none());
+    }
+
+    #[test]
     fn counts_deduplicate_and_never_merge_scopes() {
         let mut index = Index::default();
         let ip = "192.0.2.1".parse().unwrap();
         for k in [1, 2] {
-            index.configure(k, format!("if#{k}"), ip, 24, 100, k == 2);
+            index.configure(k, (format!("if#{k}"), None), ip, 24, 100, k == 2);
             index.observe(k, ip);
         }
         let other = "192.0.2.2".parse().unwrap();
@@ -250,7 +287,7 @@ mod tests {
     fn bound_and_partial_coverage() {
         let mut index = Index::default();
         for k in 0..513 {
-            index.configure(k, k.to_string(), "192.0.2.1".parse().unwrap(), 24, 0, true);
+            index.configure(k, (k.to_string(), None), "192.0.2.1".parse().unwrap(), 24, 0, true);
         }
         let out = index.finish();
         assert_eq!(out.rows.len(), 512);

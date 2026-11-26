@@ -97,6 +97,7 @@ fn vis_line(dc: HDC, a: (i32, i32), b: (i32, i32), tint: u32) {
 }
 
 thread_local! {
+    static DASHBOARD_SPAN: std::cell::Cell<usize> = const { std::cell::Cell::new(60) };
     static DASHBOARD_CHART_CACHE: std::cell::RefCell<std::collections::BTreeMap<usize, ni::visual::Series>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
@@ -123,14 +124,16 @@ fn paint_dashboard_chart(parent: HWND, item: &DRAWITEMSTRUCT) {
                 ink(), true);
             return;
         };
-        let points = series.range(series.points.len(), 60);
+        let points = series.range(series.points.len(), DASHBOARD_SPAN.with(std::cell::Cell::get));
         let max = ni::visual::Series::max_value(points);
         let left = r.left + 12;
         let top = r.top + 29;
         let plot_width = width - 24;
         let plot_height = (height - 52).max(8);
         vis_text(dc, vis_rect(left, r.top + 3, plot_width, 22),
-            &format!("{} · {} sampel · maks {} bps", series.label, points.len(), max), ink(), false);
+            &format!("{} · {} sampel · maks {} bps · P95 RX {} / TX {} bps", series.label, points.len(), max,
+                ni::visual::Series::p95(points, true).map_or_else(|| "?".into(), |n| n.to_string()),
+                ni::visual::Series::p95(points, false).map_or_else(|| "?".into(), |n| n.to_string())), ink(), false);
         let bottom = top + plot_height;
         vis_line(dc, (left, bottom), (left + plot_width, bottom), line());
         let denominator = points.len().saturating_sub(1).max(1) as i32;
