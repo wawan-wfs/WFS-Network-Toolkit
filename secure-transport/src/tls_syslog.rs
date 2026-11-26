@@ -150,6 +150,19 @@ fn accept_once(bind: SocketAddr) -> Result<TcpStream> {
 pub fn receive_once(path: &Path) -> Result<Value> {
     let config: Config = serde_json::from_slice(&bounded_file(path, 16 * 1024)?)
         .map_err(|_| "Konfigurasi TLS tidak valid.")?;
+    receive_config(config)
+}
+pub fn receive_pipe() -> Result<Value> {
+    use std::io::IsTerminal;
+    let stdin = io::stdin();
+    if stdin.is_terminal() { return Err("Konfigurasi TLS harus melalui pipe.".into()); }
+    let mut data = Vec::new();
+    stdin.lock().take(16_385).read_to_end(&mut data).map_err(|_| "Input TLS gagal.")?;
+    if data.len() > 16_384 { return Err("Input TLS terlalu besar.".into()); }
+    let config: Config = serde_json::from_slice(&data).map_err(|_| "Konfigurasi TLS tidak valid.")?;
+    receive_config(config)
+}
+fn receive_config(config: Config) -> Result<Value> {
     let allowed = pins(&config.allowed_client_sha256)?;
     let settings = server(&config)?;
     let socket = accept_once(config.bind)?;

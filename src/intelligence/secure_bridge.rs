@@ -49,11 +49,11 @@ fn execute(args: &[&std::ffi::OsStr], secret: Option<SecretBytes>, seconds: u64)
         .spawn().map_err(|_| "Secure Transport gagal dimulai.")?;
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let result = (|| {
-        if let Some(secret) = secret {
-            if secret.0.len() > 2048 { return Err("Credential pipe melampaui batas.".into()); }
-            child.stdin.take().ok_or("Credential pipe tidak tersedia.")?.write_all(&secret.0)
-                .map_err(|_| "Credential pipe gagal.")?;
-        }
+        let writer = if let Some(secret) = secret {
+            if secret.0.len() > 16_384 { return Err("Input pipe melampaui batas.".into()); }
+            let mut stdin = child.stdin.take().ok_or("Input pipe tidak tersedia.")?;
+            Some(std::thread::spawn(move || stdin.write_all(&secret.0)))
+        } else { None };
         let stdout = child.stdout.take().ok_or("Output helper tidak tersedia.")?;
         let reader = std::thread::spawn(move || {
             let mut data = Vec::new();
@@ -62,6 +62,9 @@ fn execute(args: &[&std::ffi::OsStr], secret: Option<SecretBytes>, seconds: u64)
         loop {
             if let Some(status) = child.try_wait().map_err(|_| "Status helper gagal.")? {
                 if !status.success() { return Err("Secure Transport gagal atau koneksi ditolak.".into()); }
+                if let Some(writer) = writer {
+                    writer.join().map_err(|_| "Input helper terhenti.")?.map_err(|_| "Input helper gagal.")?;
+                }
                 let data = reader.join().map_err(|_| "Output helper terhenti.")?.map_err(|_| "Output helper gagal dibaca.")?;
                 let report = Report::parse(&data)?;
                 if report.stamp().abs_diff(super::now()) > 120 { return Err("Timestamp helper tidak sesuai sesi.".into()); }
@@ -84,7 +87,7 @@ pub fn snmp(target: SocketAddr, credentials: SecretBytes) -> Result<Report> {
     Ok(r)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     pub bind: SocketAddr,
@@ -116,7 +119,11 @@ pub fn tls(path: &Path, expected: &TlsConfig) -> Result<Report> {
     if actual.bind != expected.bind || actual.allowed_client_sha256 != expected.allowed_client_sha256
         || actual.server_chain != expected.server_chain || actual.server_key != expected.server_key
         || actual.client_ca != expected.client_ca { return Err("Konfigurasi TLS berubah; batalkan.".into()); }
-    let r = execute(&[OsStr::new("syslog-tls-once"),path.as_os_str(),OsStr::new("--confirm")], None, 50)?;
+    // Pass the exact confirmed configuration rather than a mutable file path.
+    // The certificate/key files still require OS ACL protection.
+    let mut payload = SecretBytes(Vec::with_capacity(16_384));
+    serde_json::to_writer(&mut payload.0, expected).map_err(|_| "Serialisasi konfigurasi gagal.")?;
+    let r = execute(&[OsStr::new("syslog-tls-pipe"),OsStr::new("--confirm")], Some(payload), 50)?;
     if !matches!(&r,Report::Tls{bind,peer_certificate_sha256,..} if *bind == expected.bind && expected.allowed_client_sha256.contains(peer_certificate_sha256)) {
         return Err("Identitas respons TLS tidak cocok.".into());
     }

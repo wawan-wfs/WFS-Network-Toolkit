@@ -1,3 +1,9 @@
+## Integrated P1 increment 12 — immutable confirmed transport config, revision-aware IPAM workflow and native UI refinement
+
+TLS desktop bridge now pipes the exact confirmed config (new helper command syslog-tls-pipe), not a mutable config file path; stdin writer runs separately under process timeout. Certificate/key ACL and helper directory race acceptance still required. SNMP credential length validated before IPC, temporary buffers preallocated. IPAM subnet pivot now loads existing scope/CIDR metadata and captures current revision before populating editor; save checks expected revision rather than blindly treating existing key as new. Added read-only secure-history CLI and context-specific controls; refined shared light palette/buttons. SQL-only local test against secure_monitor_schema.sql and exact retention statements: 3000 inserts -> 2048 retained, max 256 per scope, five invalid records rejected, integrity_check ok. Rust, Win32 and security executable tests remain NOT RUN. No claim of full redesign or continuous collector. No CI/deployment started.
+
+---
+
 ## Integrated P1 increment 11 — fail-closed native Secure Transport integration
 
 Added native mode 33 with explicit SNMP authPriv GET and one-session mutual TLS actions, session-only Windows credential prompts, typed result validation and independent bounded SQLite summary history. A build must explicitly embed WENET_SECURE_HELPER_SHA256 and install the matching helper in a protected application directory; ordinary builds remain disabled. Bridge launches no shell, passes credentials through stdin, checks result identity/time and uses process deadlines. TLS report includes bind and observation timestamp. This is source integration only: root and companion uncompiled; helper packaging, ACL/TOCTOU security acceptance, dependency resolution and real agent tests pending. Continuous collector, full redesign and benchmark remain outstanding. No CI/deployment triggered.

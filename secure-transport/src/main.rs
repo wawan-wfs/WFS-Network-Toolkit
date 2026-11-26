@@ -15,6 +15,9 @@ fn run(args: &[String]) -> Result<()> {
         [cmd, config, confirm] if cmd == "syslog-tls-once" && confirm == "--confirm" => {
             tls_syslog::receive_once(std::path::Path::new(config))?
         }
+        [cmd, confirm] if cmd == "syslog-tls-pipe" && confirm == "--confirm" => {
+            tls_syslog::receive_pipe()?
+        }
         _ => {
             return Err("WeNet Toolkit by WFS Project — secure transport candidate\n\
                 snmpv3-get <IP:port> --confirm (credential JSON via non-terminal stdin)\n\

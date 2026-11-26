@@ -118,6 +118,7 @@ enum IntelReply {
     Syslog(ni::syslog::Summary),
     FlowReplay(ni::flow_replay::Report),
     SecureHistory(Vec<ni::secure_monitor::Report>),
+    IpamPivot(Vec<ni::ipam_notes::Note>, String, String),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -178,6 +179,7 @@ struct IntelState {
     ipam_notes: Vec<ni::ipam_notes::Note>,
     visible_notes: Vec<ni::ipam_notes::Note>,
     visible_subnet_keys: Vec<Option<(String, String)>>,
+    ipam_pivot_draft: Option<(String, String, i64)>,
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
     flow_replay: Option<ni::flow_replay::Report>,
@@ -1026,6 +1028,11 @@ impl Native {
                     );
                 }
                 note.revision
+            } else if let Some((scope, cidr, rev)) = &self.intel.ipam_pivot_draft {
+                if scope != &draft.scope || cidr != &draft.cidr {
+                    return Err("Draft scope berbeda; gunakan Reset untuk membuat metadata lain.".into());
+                }
+                *rev
             } else {
                 0
             };
@@ -1271,9 +1278,23 @@ impl Native {
                 self.intel.mode = DHCP6_HISTORY_MODE;
                 self.intel_mode_labels(DHCP6_HISTORY_MODE);
             }
+            Ok(IntelReply::IpamPivot(rows, scope, cidr)) => {
+                let note = rows.iter().find(|n| n.scope == scope && n.cidr == cidr);
+                let revision = note.map_or(0, |n| n.revision);
+                let editor = note.map_or_else(|| format!("{scope}|{cidr}|label|||"), |n| n.editor());
+                self.intel.ipam_pivot_draft = Some((scope, cidr, revision));
+                self.intel.ipam_notes = rows;
+                self.intel.filter.clear();
+                select(self.h(INTEL_MODE), NOTES_MODE);
+                self.intel.mode = NOTES_MODE;
+                self.intel_mode_labels(NOTES_MODE);
+                set(self.h(INTEL_FILTER), &editor);
+                self.set_notice("Draft scope dimuat dengan revisi aktual. Tinjau sebelum menyimpan.");
+            }
             Ok(IntelReply::IpamNotes(rows, saved)) => {
                 self.intel.ipam_notes = rows;
                 if saved {
+                    self.intel.ipam_pivot_draft = None;
                     self.intel.filter.clear();
                     set(self.h(INTEL_FILTER), "");
                 }
@@ -1469,6 +1490,7 @@ impl Native {
             INTEL_MODE => {
                 let mode = selection(self.h(INTEL_MODE));
                 if mode != self.intel.mode {
+                    self.intel.ipam_pivot_draft = None;
                     self.intel.router_history = None;
                     self.intel.dhcp6_history = None;
                     self.intel.previous_mode = None;
@@ -1503,6 +1525,7 @@ impl Native {
             }
             INTEL_SEARCH | INTEL_RESET_FILTER => {
                 if id == INTEL_RESET_FILTER {
+                    self.intel.ipam_pivot_draft = None;
                     self.intel.router_history = None;
                     set(self.h(INTEL_FILTER), "");
                 }
@@ -1595,10 +1618,11 @@ impl Native {
                     let (scope, prefix) = self.intel.visible_subnet_keys.get(index)
                         .and_then(Option::as_ref).cloned()
                         .ok_or("Scope teramati belum terbukti; gunakan metadata manual secara eksplisit.")?;
-                    select(self.h(INTEL_MODE), NOTES_MODE);
-                    self.intel_action(INTEL_MODE)?;
-                    set(self.h(INTEL_FILTER), &format!("{scope}|{prefix}|label|||"));
-                    self.set_notice("Draft metadata scope terverifikasi. Tinjau lalu Simpan; tidak mengubah router.");
+                    let path = self.notes_path()?;
+                    self.start_intel(move || {
+                        let rows = ni::ipam_notes::page(&path)?;
+                        Ok(IntelReply::IpamPivot(rows, scope, prefix))
+                    })?;
                     return Ok(());
                 }
                 if mode == NOTES_MODE {
@@ -1722,7 +1746,7 @@ impl Native {
                 // Serialize directly from UTF-16 into short-lived buffers. Wipe
                 // temporary password bytes on drop, including error paths.
                 let utf8 = |v: &[u16]| -> Result<ni::secure_bridge::SecretBytes> {
-                    let mut bytes = ni::secure_bridge::SecretBytes(Vec::new());
+                    let mut bytes = ni::secure_bridge::SecretBytes(Vec::with_capacity(2056));
                     for c in char::decode_utf16(v[..units(v)].iter().copied()) {
                         let c = c.map_err(|_| "Kredensial UTF-16 tidak valid.")?;
                         let mut buf = [0u8;4];
@@ -1734,7 +1758,11 @@ impl Native {
                 let user = utf8(&auth.user)?;
                 let ap = utf8(&auth.password)?;
                 let pp = utf8(&privacy.password)?;
-                let mut secret = ni::secure_bridge::SecretBytes(Vec::new());
+                if !(1..=32).contains(&user.0.len()) || !(8..=128).contains(&ap.0.len())
+                    || !(8..=128).contains(&pp.0.len()) || ap.0 == pp.0 {
+                    return Err("Kredensial SNMP tidak memenuhi batas atau password sama.".into());
+                }
+                let mut secret = ni::secure_bridge::SecretBytes(Vec::with_capacity(2048));
                 use serde::Serialize;
                 #[derive(Serialize)]
                 struct Pipe<'a> { username: &'a str, auth_password: &'a str, privacy_password: &'a str }
@@ -2549,7 +2577,7 @@ impl Native {
                     push([report.label().into(), report.scope(), report.summary(), format!("UTC {}",report.stamp())],
                         &|| format!("{}\n{}\n{}\nObservasi historis, bukan status online saat ini.",report.label(),report.scope(),report.summary()));
                 }
-                "Secure Transport: GET SNMPv3 atau TLS Syslog satu sesi. Histori hanya ringkasan tervalidasi. Build tanpa helper terverifikasi tidak mengaktifkan transport."
+                "Secure Transport · GET SNMPv3 (IP:port) atau TLS Syslog satu sesi. Histori hanya ringkasan tervalidasi; build tanpa helper terverifikasi tidak mengaktifkan transport."
             }
             REPLAY_MODE => {
                 if let Some(report) = &self.intel.flow_replay {
@@ -3898,10 +3926,11 @@ impl Native {
         }
         for (id, show) in [
             (INTEL_HOST, mode != STORAGE_MODE),
-            (INTEL_REFRESH, mode != STORAGE_MODE),
-            (INTEL_FLOW, mode != STORAGE_MODE),
+            (INTEL_REFRESH, mode != STORAGE_MODE && mode != SECURE_MODE),
+            (INTEL_FLOW, mode != STORAGE_MODE && mode != SECURE_MODE),
             (INTEL_HISTORY, mode != STORAGE_MODE),
-            (INTEL_REDACT, mode != STORAGE_MODE),
+            (INTEL_REDACT, mode != STORAGE_MODE && mode != SECURE_MODE),
+            (INTEL_PROBE, mode != SECURE_MODE),
         ] {
             unsafe {
                 ShowWindow(

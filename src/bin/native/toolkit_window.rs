@@ -182,13 +182,13 @@ fn bg() -> u32 {
     color(255, 255, 255)
 }
 fn rail() -> u32 {
-    color(238, 245, 249)
+    color(241, 246, 250)
 }
 fn ink() -> u32 {
-    color(16, 44, 70)
+    color(20, 38, 61)
 }
 fn accent() -> u32 {
-    color(0, 103, 107)
+    color(0, 100, 108)
 }
 fn muted() -> u32 {
     color(65, 85, 102)
@@ -197,7 +197,7 @@ fn line() -> u32 {
     color(207, 220, 227)
 }
 fn selected_nav() -> u32 {
-    color(210, 239, 235)
+    color(213, 238, 236)
 }
 fn button_border() -> u32 {
     color(115, 137, 152)
@@ -1553,7 +1553,7 @@ fn draw_button(item: &DRAWITEMSTRUCT) {
     let selected = item.itemState & ODS_SELECTED != 0;
     let nav = (NAV..NAV_END).contains(&id);
     let active = nav && NAV_SELECTION.with(|s| s.get() == PAGES[(id - NAV) as usize]);
-    let primary = matches!(id, IP_APPLY | MAC_APPLY | BACKUP_SAVE | CONFIRM | CALC);
+    let primary = matches!(id, IP_APPLY | MAC_APPLY | BACKUP_SAVE | CONFIRM | CALC | INTEL_SEARCH | INTEL_ROUTER);
     let body = if nav {
         if active {
             selected_nav()
@@ -1589,7 +1589,7 @@ fn draw_button(item: &DRAWITEMSTRUCT) {
     }
     let r = item.rcItem;
     let h = r.bottom - r.top;
-    let radius = (h / 3).max(3);
+    let radius = (h / 4).clamp(3, 14);
     let border = if nav || primary || disabled {
         body
     } else {
