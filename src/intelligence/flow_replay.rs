@@ -30,6 +30,7 @@ pub struct Report {
     pub generation_restarts: usize,
     pub sampling_fields: usize,
     pub nat_fields: usize,
+    pub options_records: u64,
 }
 
 fn decode_hex(input: &str) -> Result<Vec<u8>> {
@@ -78,13 +79,14 @@ pub fn replay(bytes: &[u8]) -> Result<Report> {
             Ok(batch) => {
                 report.duplicates += batch.duplicate as usize;
                 report.decoded_records += batch.flows.len();
+                report.options_records += u64::from(batch.options_records);
                 report.missing_templates += u64::from(batch.missing);
                 report.skipped += u64::from(batch.skipped);
                 report.repeated_sequence += batch.sequence_repeated as usize;
                 report.reordered_sequence += batch.sequence_reordered as usize;
                 report.generation_restarts += batch.generation_restart as usize;
-                report.sampling_fields += batch.provenance.iter().filter(|p| p.has_sampling()).count();
-                report.nat_fields += batch.provenance.iter().filter(|p| p.has_nat()).count();
+                report.sampling_fields += batch.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(super::flow::Provenance::has_sampling)).count();
+                report.nat_fields += batch.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(super::flow::Provenance::has_nat)).count();
             }
             Err(_) => report.invalid += 1,
         }

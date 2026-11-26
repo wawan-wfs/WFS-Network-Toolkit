@@ -1069,14 +1069,18 @@ impl Archive {
                 let f = r.flow;
                 let source = masked(&r.site, &r.vrf, f.source);
                 let destination = masked(&r.site, &r.vrf, f.destination);
-                let row = serde_json::json!({
+                let mut row = serde_json::json!({
                     "received_utc":f.received_at,"export_utc":f.export_at,"site":scope("SITE",&r.site),
                     "vrf":r.vrf.as_ref().map(|v|scope("VRF",v)),"profile":scope("PROFILE",&r.profile),
                     "exporter":scope("EXPORTER",&f.exporter.to_string()),"domain":f.domain,"version":f.version,
                     "source":source,"destination":destination,"source_port":f.source_port,"destination_port":f.destination_port,
                     "protocol":f.protocol,"ingress":f.ingress,"egress":f.egress,"reported_bytes":f.octets,"reported_packets":f.packets,
-                    "direction":r.direction.as_str(),"sampling":"unknown"
+                    "direction":r.direction.as_str(),"sampling":if f.provenance.as_ref().is_some_and(super::flow::Provenance::has_sampling) { "reported_unscaled" } else { "unknown" }
                 });
+                // Keep CSV columns stable; never include NAT identities in redacted JSON.
+                if format == ExportFormat::Json && !redact && let Some(p) = &f.provenance {
+                    row["provenance"] = serde_json::to_value(p).map_err(error)?;
+                }
                 match format {
                     ExportFormat::Csv => {
                         let keys = [
@@ -1566,6 +1570,7 @@ mod tests {
                 packets: Some(3),
                 datagram_hash: [9; 32],
                 ordinal,
+                provenance: None,
             },
         }
     }
@@ -2030,6 +2035,37 @@ mod tests {
         drop(db);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
+    #[test]
+    fn durable_provenance_survives_reopen_without_leaking_redacted_nat() {
+        let path = temp_path();
+        let mut db = Archive::writer(&path).unwrap();
+        let mut a = row("test", 1000, 0);
+        let old_json = serde_json::to_string(&a).unwrap();
+        assert!(!old_json.contains("provenance"));
+        assert!(serde_json::from_str::<ArchiveRow>(&old_json).unwrap().flow.provenance.is_none());
+        a.flow.provenance = Some(super::super::flow::Provenance {
+            selector_id: Some(9), sampling_packet_interval: Some(10),
+            post_source_v4: Some("198.51.100.55".parse().unwrap()),
+            ..Default::default()
+        });
+        assert_eq!(db.insert(std::slice::from_ref(&a)).unwrap(), 1);
+        assert_eq!(db.insert(&[a]).unwrap(), 0);
+        drop(db);
+        let mut db = Archive::reader(&path).unwrap();
+        let page = db.page(&Query::default(), None, 20).unwrap();
+        assert_eq!(page.rows[0].flow.provenance.as_ref().unwrap().sampling_packet_interval, Some(10));
+        for redact in [true, false] {
+            let mut bytes = vec![];
+            db.export(&Query::default(), ExportFormat::Json, redact, &mut bytes).unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert_eq!(text.contains("198.51.100.55"), !redact);
+            assert_eq!(text.contains("\"provenance\""), !redact);
+            assert!(text.contains("reported_unscaled"));
+        }
+        drop(db);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn export_and_import_do_not_expose_addresses_when_redacted() {
         let path = temp_path();

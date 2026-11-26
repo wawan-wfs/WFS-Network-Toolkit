@@ -38,11 +38,17 @@ pub struct Flow {
     pub packets: Option<u64>,
     pub datagram_hash: [u8; 32],
     pub ordinal: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
 }
 /// Optional exporter-reported IPFIX fields; not inferred NAT mappings or
-/// traffic multipliers. Kept separate from the existing persisted Flow schema.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+/// traffic multipliers. Optional JSON field preserves legacy SQLite records.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Provenance {
+    pub selector_id: Option<u64>,
+    pub selector_algorithm: Option<u16>,
+    pub sampling_from_options: bool,
     pub sampling_interval_legacy: Option<u32>,
     pub sampling_algorithm_legacy: Option<u8>,
     pub sampling_packet_interval: Option<u32>,
@@ -60,6 +66,8 @@ impl Provenance {
         match id {
             34 => self.sampling_interval_legacy = number().filter(|&n| n > 0),
             35 => self.sampling_algorithm_legacy = number().and_then(|n| u8::try_from(n).ok()),
+            302 => self.selector_id = integer(v),
+            304 => self.selector_algorithm = number().and_then(|n| u16::try_from(n).ok()),
             305 => self.sampling_packet_interval = number().filter(|&n| n > 0),
             306 => self.sampling_packet_space = number(),
             225 => self.post_source_v4 = <[u8; 4]>::try_from(v).ok().map(Ipv4Addr::from),
@@ -72,7 +80,7 @@ impl Provenance {
         }
     }
     pub fn has_sampling(&self) -> bool {
-        self.sampling_interval_legacy.is_some() || self.sampling_algorithm_legacy.is_some()
+        self.selector_algorithm.is_some() || self.sampling_interval_legacy.is_some() || self.sampling_algorithm_legacy.is_some()
             || self.sampling_packet_interval.is_some() || self.sampling_packet_space.is_some()
     }
     pub fn has_nat(&self) -> bool {
@@ -82,7 +90,8 @@ impl Provenance {
     }
     pub fn summary(&self) -> String {
         format!(
-            "Sampling legacy interval {:?}, algorithm {:?}; packet interval {:?}, space {:?}. NAT post-observation v4 {:?} → {:?}, v6 {:?} → {:?}, port {:?} → {:?}. Hanya field terlapor; tidak mengalikan counter.",
+            "Selector {:?}, algorithm {:?}, opsi {}. Sampling legacy interval {:?}, algorithm {:?}; packet interval {:?}, space {:?}. NAT post-observation v4 {:?} → {:?}, v6 {:?} → {:?}, port {:?} → {:?}. Hanya field terlapor; tidak mengalikan counter.",
+            self.selector_id, self.selector_algorithm, self.sampling_from_options,
             self.sampling_interval_legacy, self.sampling_algorithm_legacy,
             self.sampling_packet_interval, self.sampling_packet_space,
             self.post_source_v4, self.post_destination_v4, self.post_source_v6,
@@ -182,6 +191,7 @@ struct Template {
     updated: u64,
     min: usize,
     supported: bool,
+    options_scope: Option<u16>,
 }
 type Session = (SocketAddr, u16, u32);
 type Key = (Session, u16);
@@ -195,7 +205,7 @@ pub struct Decoder {
 #[derive(Default)]
 pub struct Batch {
     pub flows: Vec<Flow>,
-    pub provenance: Vec<Provenance>,
+    pub options_records: u32,
     pub missing: u32,
     pub skipped: u32,
     pub duplicate: bool,
@@ -256,6 +266,7 @@ impl Decoder {
             .is_some_and(|(up, &(last_export, old_up))| exported > last_export && up < old_up);
         let mut staged: HashMap<Key, Template> = HashMap::new();
         let mut batch = Batch::default();
+        let mut selector_options: BTreeMap<u64, Option<Provenance>> = BTreeMap::new();
         let mut set_count = 0_u32;
         while !packet.is_empty() {
             set_count += 1;
@@ -268,10 +279,20 @@ impl Decoder {
                 &mut packet,
                 n.checked_sub(4).ok_or("Panjang set tidak valid.")?,
             )?;
-            if (version == 10 && id == 2) || (version == 9 && id == 0) {
+            let options = version == 10 && id == 3;
+            if (version == 10 && id == 2) || (version == 9 && id == 0) || options {
                 while !set.is_empty() && !zero_padding(set) {
                     let tid = u16b(&mut set)?;
                     let count = u16b(&mut set)?;
+                    let options_scope = if options {
+                        let scope = u16b(&mut set)?;
+                        if scope == 0 || scope > count {
+                            return Err("Scope Options Template tidak valid.".into());
+                        }
+                        Some(scope)
+                    } else {
+                        None
+                    };
                     if tid < 256 || !(1..=128).contains(&count) || staged.len() >= 128 {
                         return Err("Template atau withdrawal UDP tidak didukung.".into());
                     }
@@ -323,6 +344,7 @@ impl Decoder {
                             updated: stamp,
                             min,
                             supported,
+                            options_scope,
                         },
                     );
                 }
@@ -339,6 +361,47 @@ impl Decoder {
                     batch.missing += 1;
                     continue;
                 };
+                if let Some(scope_count) = tpl.options_scope {
+                    // Only a single, standard selectorId scope is correlated.
+                    // Additional scopes, vendor IEs and conflicting duplicate
+                    // records cannot establish a sampling mapping.
+                    let eligible = scope_count == 1
+                        && tpl.fields.first().is_some_and(|f| !f.enterprise && f.id == 302);
+                    while !set.is_empty() {
+                        if set.len() < tpl.min && zero_padding(set) {
+                            break;
+                        }
+                        if batch.options_records >= 4096 {
+                            return Err("Batas Options Data Record tercapai.".into());
+                        }
+                        batch.options_records += 1;
+                        let mut metadata = Provenance::default();
+                        let mut seen = std::collections::BTreeSet::new();
+                        let mut unique = true;
+                        for field in &tpl.fields {
+                            let len = if field.length == u16::MAX {
+                                let first = take(&mut set, 1)?[0];
+                                if first == 255 { usize::from(u16b(&mut set)?) } else { usize::from(first) }
+                            } else { usize::from(field.length) };
+                            let v = take(&mut set, len)?;
+                            if !field.enterprise && matches!(field.id, 302 | 304 | 305 | 306 | 34 | 35) {
+                                unique &= seen.insert(field.id);
+                                metadata.read_field(field.id, v);
+                            }
+                        }
+                        if eligible && unique && metadata.has_sampling()
+                            && let Some(selector) = metadata.selector_id
+                        {
+                            selector_options.entry(selector)
+                                .and_modify(|existing| {
+                                    if existing.as_ref() != Some(&metadata) {
+                                        *existing = None;
+                                    }
+                                }).or_insert(Some(metadata));
+                        }
+                    }
+                    continue;
+                }
                 if !tpl.supported {
                     batch.skipped += 1;
                     continue;
@@ -418,7 +481,6 @@ impl Decoder {
                             .filter(|(a, b)| usable(a) && usable(b))
                             .or_else(|| v6.0.zip(v6.1).filter(|(a, b)| usable(a) && usable(b)));
                     if let Some((source, destination)) = pair {
-                        batch.provenance.push(provenance);
                         batch.flows.push(Flow {
                             exporter,
                             domain,
@@ -436,6 +498,7 @@ impl Decoder {
                             packets,
                             datagram_hash: digest,
                             ordinal: (set_count << 16) | record,
+                            provenance: (provenance.has_sampling() || provenance.has_nat() || provenance.selector_id.is_some()).then_some(provenance),
                         });
                     } else {
                         batch.skipped += 1;
@@ -444,7 +507,22 @@ impl Decoder {
                 }
             } else {
                 batch.skipped += 1;
-            } // Options templates are not interpreted; no inferred sampling rate.
+            } // Unsupported sets are counted, not interpreted.
+        }
+        // Same-datagram correlation only; no stale sampling state across
+        // datagrams, and explicit per-record sampling always wins.
+        for flow in &mut batch.flows {
+            if let Some(p) = flow.provenance.as_mut()
+                && !p.has_sampling()
+                && let Some(Some(options)) = p.selector_id.and_then(|id| selector_options.get(&id))
+            {
+                p.selector_algorithm = options.selector_algorithm;
+                p.sampling_interval_legacy = options.sampling_interval_legacy;
+                p.sampling_algorithm_legacy = options.sampling_algorithm_legacy;
+                p.sampling_packet_interval = options.sampling_packet_interval;
+                p.sampling_packet_space = options.sampling_packet_space;
+                p.sampling_from_options = true;
+            }
         }
         // Commit diagnostic state only after successful decoding. Same sequence
         // can be valid (IPFIX template-only messages); never count it as loss.
@@ -626,7 +704,6 @@ struct Buffer {
     stats: Stats,
     profile_stats: BTreeMap<(IpAddr, u32), Stats>,
     flows: VecDeque<Flow>,
-    provenance: BTreeMap<FlowIdentity, Provenance>,
 }
 pub struct Collector {
     pub config: CollectorConfig,
@@ -853,8 +930,8 @@ impl Collector {
                                         stats.sequence_reordered += u64::from(b.sequence_reordered);
                                         stats.sequence_repeated += u64::from(b.sequence_repeated);
                                         stats.generation_restarts += u64::from(b.generation_restart);
-                                        stats.sampled_fields += b.provenance.iter().filter(|p| p.has_sampling()).count() as u64;
-                                        stats.nat_fields += b.provenance.iter().filter(|p| p.has_nat()).count() as u64;
+                                        stats.sampled_fields += b.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(Provenance::has_sampling)).count() as u64;
+                                        stats.nat_fields += b.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(Provenance::has_nat)).count() as u64;
                                     }
                                     Err(_) => stats.invalid += 1,
                                 }
@@ -869,17 +946,12 @@ impl Collector {
                                     data.stats.sequence_reordered += u64::from(b.sequence_reordered);
                                     data.stats.sequence_repeated += u64::from(b.sequence_repeated);
                                     data.stats.generation_restarts += u64::from(b.generation_restart);
-                                    data.stats.sampled_fields += b.provenance.iter().filter(|p| p.has_sampling()).count() as u64;
-                                    data.stats.nat_fields += b.provenance.iter().filter(|p| p.has_nat()).count() as u64;
-                                    for (f, provenance) in b.flows.into_iter().zip(b.provenance) {
+                                    data.stats.sampled_fields += b.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(Provenance::has_sampling)).count() as u64;
+                                    data.stats.nat_fields += b.flows.iter().filter(|f| f.provenance.as_ref().is_some_and(Provenance::has_nat)).count() as u64;
+                                    for f in b.flows {
                                         if data.flows.len() == MAX_ROWS {
-                                            if let Some(old) = data.flows.pop_front() {
-                                                data.provenance.remove(&old.identity());
-                                            }
+                                            data.flows.pop_front();
                                             data.stats.evicted += 1;
-                                        }
-                                        if provenance.has_sampling() || provenance.has_nat() {
-                                            data.provenance.insert(f.identity(), provenance);
                                         }
                                         data.flows.push_back(f);
                                     }
@@ -961,9 +1033,6 @@ impl Collector {
                 Some((label, stats.clone()))
             })
             .collect()
-    }
-    pub fn provenance(&self) -> BTreeMap<FlowIdentity, Provenance> {
-        self.data.lock().map_or_else(|_| BTreeMap::new(), |b| b.provenance.clone())
     }
     pub fn snapshot(&self) -> (Stats, Vec<Flow>) {
         self.read_buffer(true)
@@ -1262,6 +1331,37 @@ mod tests {
         }
     }
     #[test]
+    fn options_selector_is_exact_and_local_to_datagram() {
+        let exp = "127.0.0.1:55000".parse().unwrap();
+        let mut d = Decoder::default();
+        let mut opt = vec![];
+        for n in [257u16, 3, 1, 302, 8, 305, 4, 306, 4] {
+            opt.extend(n.to_be_bytes());
+        }
+        let mut tpl = vec![];
+        for n in [256u16, 3, 8, 4, 12, 4, 302, 8] {
+            tpl.extend(n.to_be_bytes());
+        }
+        let mut options_data = 9u64.to_be_bytes().to_vec();
+        options_data.extend(2u32.to_be_bytes());
+        options_data.extend(98u32.to_be_bytes());
+        let mut data = vec![192, 0, 2, 1, 203, 0, 113, 2];
+        data.extend(9u64.to_be_bytes());
+        let sets = [set(3, &opt), set(2, &tpl), set(256, &data), set(257, &options_data)];
+        let b = d.ingest(exp, &packet(10, 11, 1, 100, 0, &sets), 100).unwrap();
+        assert_eq!(b.options_records, 1);
+        assert!(b.flows[0].provenance.as_ref().unwrap().sampling_from_options);
+        assert_eq!(b.flows[0].provenance.as_ref().unwrap().sampling_packet_space, Some(98));
+        let b = d.ingest(exp, &packet(10, 11, 2, 101, 0, &[set(256, &data)]), 101).unwrap();
+        assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
+        let mut conflict = options_data.clone();
+        conflict[15] = 99;
+        let sets = [set(257, &options_data), set(257, &conflict), set(256, &data)];
+        let b = d.ingest(exp, &packet(10, 11, 3, 102, 0, &sets), 102).unwrap();
+        assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
+    }
+
+    #[test]
     fn ipfix_provenance_is_record_local_and_does_not_scale_counters() {
         let exp = "127.0.0.1:55000".parse().unwrap();
         let mut decoder = Decoder::default();
@@ -1282,13 +1382,13 @@ mod tests {
         let batch = decoder.ingest(exp, &packet, 100).unwrap();
         assert_eq!(batch.flows.len(), 1);
         assert_eq!(batch.flows[0].octets, Some(400));
-        let p = &batch.provenance[0];
+        let p = batch.flows[0].provenance.as_ref().unwrap();
         assert_eq!(p.sampling_packet_interval, Some(2));
         assert_eq!(p.sampling_packet_space, Some(98));
         assert_eq!(p.post_source_v4, Some(Ipv4Addr::new(198, 51, 100, 9)));
         assert_eq!(p.post_source_port, Some(1234));
         assert!(p.has_sampling() && p.has_nat());
-        assert!(decoder.ingest(exp, &packet, 101).unwrap().provenance.is_empty());
+        assert!(decoder.ingest(exp, &packet, 101).unwrap().flows.is_empty());
     }
 
     #[test]

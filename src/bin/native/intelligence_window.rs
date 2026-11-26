@@ -2971,7 +2971,6 @@ impl Native {
                     let (stat, rows) = collector.snapshot();
                     match mode {
                         9 => {
-                            let provenance = collector.provenance();
                             for f in rows.iter().rev() {
                                 let source = f.source_port.map_or_else(
                                     || f.source.to_string(),
@@ -3007,7 +3006,7 @@ impl Native {
                                             display_opt(f.packets),
                                             f.export_at,
                                             f.received_at,
-                                            provenance.get(&f.identity()).map_or_else(
+                                            f.provenance.as_ref().map_or_else(
                                                 || "Sampling/NAT tidak diketahui.".into(),
                                                 flow::Provenance::summary
                                             )
@@ -3700,7 +3699,7 @@ impl Native {
                             ],
                             &|| {
                                 format!(
-                                    "{src} → {dst}\nProfil {} / site {} / VRF {}\nExporter {} / domain {} / versi {}\nProtokol {} · interface {} → {}\nByte {} · paket {} · sampling tidak diketahui\nExport UTC {} · diterima UTC {}",
+                                    "{src} → {dst}\nProfil {} / site {} / VRF {}\nExporter {} / domain {} / versi {}\nProtokol {} · interface {} → {}\nByte {} · paket {}\nExport UTC {} · diterima UTC {}\n{}",
                                     r.profile,
                                     r.site,
                                     r.vrf.as_deref().unwrap_or("—"),
@@ -3713,7 +3712,11 @@ impl Native {
                                     display_opt(f.octets),
                                     display_opt(f.packets),
                                     f.export_at,
-                                    f.received_at
+                                    f.received_at,
+                                    f.provenance.as_ref().map_or_else(
+                                        || "Sampling/NAT tidak diketahui.".into(),
+                                        flow::Provenance::summary
+                                    )
                                 )
                             },
                         );

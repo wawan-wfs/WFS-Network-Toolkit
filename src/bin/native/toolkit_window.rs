@@ -2196,6 +2196,7 @@ fn smoke_ui(ui: &mut Native) -> Result<()> {
                 packets: None,
                 datagram_hash: [7; 32],
                 ordinal: 0,
+                provenance: None,
             },
         };
         let mut db = Archive::writer(&path)?;
