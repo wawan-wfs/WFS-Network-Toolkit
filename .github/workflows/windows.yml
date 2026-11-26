@@ -1,6 +1,11 @@
-name: WeNet Toolkit Windows — manual build and tests
+name: WeNet Toolkit Windows — build and acceptance
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+concurrency:
+  group: wenet-windows-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
@@ -10,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         id: checkout
+        with:
+          persist-credentials: false
       - name: Install stable Rust with lint and format components
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - name: Collect independent build gate results (fail closed)
@@ -42,7 +49,12 @@ jobs:
       - name: Package portable and installer
         shell: pwsh
         run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:GITHUB_SHA) { throw 'Checkout SHA mismatch' }
           New-Item -ItemType Directory -Force dist/Portable,dist/Installer | Out-Null
+          [ordered]@{ repository = $env:GITHUB_REPOSITORY; commit = $actual; run_id = $env:GITHUB_RUN_ID; run_attempt = $env:GITHUB_RUN_ATTEMPT; event = $env:GITHUB_EVENT_NAME } | ConvertTo-Json | Set-Content dist/BUILD_PROVENANCE.json -Encoding utf8
+          git archive --format=zip --output="dist/WeNet-Toolkit-source-$actual.zip" HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
           Copy-Item target/release/WeNet-Toolkit.exe,target/release/wfs-netctl.exe dist/Portable/
           Copy-Item README.md dist/
           Copy-Item docs dist/ -Recurse
@@ -64,7 +76,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'Installer build failed' }
           Push-Location dist
           try {
-            Get-ChildItem Portable,Installer -File -Recurse | Sort-Object FullName | ForEach-Object {
+            Get-ChildItem -Path Portable,Installer,'BUILD_PROVENANCE.json','WeNet-Toolkit-source-*.zip' -File -Recurse | Sort-Object FullName | ForEach-Object {
               $relative = [IO.Path]::GetRelativePath($PWD.Path, $_.FullName).Replace('\','/')
               "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
             } | Set-Content SHA256SUMS.txt -Encoding ascii
