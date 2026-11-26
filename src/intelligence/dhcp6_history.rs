@@ -232,6 +232,82 @@ pub fn page_before(
     Ok(out)
 }
 
+fn validate_archive(path: &Path) -> Result<()> {
+    let conn = open(path, false)?;
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .map_err(error)?;
+    if integrity != "ok" {
+        return Err("Integritas histori DHCPv6 gagal.".into());
+    }
+    let mut statement = conn
+        .prepare("SELECT authority,stamp,payload FROM dhcp6_sample ORDER BY authority,stamp LIMIT 3841")
+        .map_err(error)?;
+    let mut rows = statement.query([]).map_err(error)?;
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut bytes = 0usize;
+    let mut total = 0;
+    while let Some(row) = rows.next().map_err(error)? {
+        let authority: String = row.get(0).map_err(error)?;
+        let stamp: i64 = row.get(1).map_err(error)?;
+        let payload = row.get_ref(2).map_err(error)?.as_str().map_err(error)?;
+        total += 1;
+        bytes = bytes.saturating_add(payload.len());
+        let count = counts.entry(authority.clone()).or_default();
+        *count += 1;
+        if *count > 120 || counts.len() > 32 || total > 3840
+            || bytes > 64 * 1024 * 1024 || stamp < 0 || payload.len() > MAX_BYTES
+        {
+            return Err("Histori DHCPv6 di luar batas.".into());
+        }
+        let capture: Capture = serde_json::from_str(payload).map_err(error)?;
+        capture.validate()?;
+        if capture.authority != authority || capture.stamp != stamp as u64 {
+            return Err("Identitas histori DHCPv6 tidak cocok.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Independent SQLite backup, published only after complete schema/row checks.
+pub fn backup(path: &Path, destination: &Path) -> Result<()> {
+    use rusqlite::backup::{Backup, StepResult};
+    use std::{fs::OpenOptions, time::Instant};
+    let source = open(path, false)?;
+    let stage = super::archive_ops::Stage::new(destination)?;
+    drop(OpenOptions::new().write(true).create_new(true).open(&stage.file).map_err(error)?);
+    let mut output = Connection::open_with_flags(&stage.file, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(error)?;
+    {
+        let copy = Backup::new(&source, &mut output).map_err(error)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if Instant::now() >= deadline {
+                return Err("Batas waktu backup DHCPv6 tercapai.".into());
+            }
+            match copy.step(128).map_err(error)? {
+                StepResult::Done => break,
+                StepResult::More => std::thread::yield_now(),
+                _ => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+    let mode: String = output.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
+        .map_err(error)?;
+    if !mode.eq_ignore_ascii_case("delete") {
+        return Err("Backup DHCPv6 tidak mandiri.".into());
+    }
+    drop(output);
+    validate_archive(&stage.file)?;
+    OpenOptions::new().write(true).open(&stage.file)
+        .and_then(|file| file.sync_all()).map_err(error)?;
+    stage.publish(destination)
+}
+
+pub fn recover(source: &Path, destination: &Path) -> Result<()> {
+    super::archive_ops::recover_independent(source, destination, validate_archive)
+}
+
 /// Export aggregate coverage only, without router identity, addresses or DUID.
 pub fn export_summary(path: &Path, authority: &str, destination: &Path) -> Result<()> {
     use std::io::Write;
@@ -317,6 +393,13 @@ mod tests {
         let older = page_before(&path, &authority.display(), Some(rows[0].stamp)).unwrap();
         assert_eq!(older.len(), 1);
         assert_eq!(older[0].stamp, rows[1].stamp);
+        let backup_path = dir.join("backup.sqlite3");
+        backup(&path, &backup_path).unwrap();
+        assert!(backup(&path, &backup_path).is_err());
+        let recovered = dir.join("recovered.sqlite3");
+        recover(&backup_path, &recovered).unwrap();
+        assert_eq!(page(&recovered, &authority.display()).unwrap().len(), 2);
+        assert!(recover(&backup_path, &recovered).is_err());
         let summary = dir.join("summary.json");
         export_summary(&path, &authority.display(), &summary).unwrap();
         let json = std::fs::read_to_string(&summary).unwrap();

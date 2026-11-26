@@ -802,9 +802,26 @@ impl Native {
                 }
             }
         }
+        let chart = if self.page == Page::Intel
+            && selection(self.h(INTEL_MODE)) == DASHBOARD_MODE
+        {
+            wfs_network_toolkit::ui_layout::dashboard_chart_rect(rect.bottom, dpi as i32)
+        } else {
+            None
+        };
         for item in &self.widgets {
+            let logical = if item.id == INTEL_TABLE && chart.is_some() {
+                [228, 273, -256, -513]
+            } else {
+                item.rect
+            };
             let [x, y, width, height] =
-                control_rect(item.rect, rect.right, rect.bottom, dpi as i32);
+                control_rect(logical, rect.right, rect.bottom, dpi as i32);
+            if item.id == INTEL_CHART {
+                unsafe {
+                    ShowWindow(item.handle, if chart.is_some() { SW_SHOW } else { SW_HIDE });
+                }
+            }
             unsafe {
                 MoveWindow(item.handle, x, y, width, height, 0);
             }
@@ -1765,8 +1782,23 @@ unsafe extern "system" fn wnd(h: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 .max(440);
             0
         }
+        WM_NOTIFY if lparam != 0 => {
+            let header = unsafe { &*(lparam as *const NMHDR) };
+            if header.idFrom == INTEL_TABLE as usize && header.code == LVN_ITEMCHANGED {
+                let chart = unsafe { GetDlgItem(h, INTEL_CHART) };
+                if !chart.is_null() {
+                    unsafe { InvalidateRect(chart, null(), 0) };
+                }
+            }
+            0
+        }
         WM_DRAWITEM if lparam != 0 => {
-            draw_button(unsafe { &*(lparam as *const DRAWITEMSTRUCT) });
+            let item = unsafe { &*(lparam as *const DRAWITEMSTRUCT) };
+            if item.CtlID == INTEL_CHART as u32 {
+                paint_dashboard_chart(h, item);
+            } else {
+                draw_button(item);
+            }
             1
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {

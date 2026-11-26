@@ -1183,6 +1183,30 @@ mod tests {
         }
     }
     #[test]
+    fn sequence_diagnostics_isolate_sessions_wrap_and_restart() {
+        let exp = "127.0.0.1:55000".parse().unwrap();
+        let mut decoder = Decoder::default();
+        let first = packet(10, 11, u32::MAX, 100, 0, &[template(10)]);
+        assert!(!decoder.ingest(exp, &first, 100).unwrap().sequence_reordered);
+        let wrap = packet(10, 11, 0, 101, 0, &[data(false)]);
+        assert!(!decoder.ingest(exp, &wrap, 101).unwrap().sequence_reordered);
+        let same = packet(10, 11, 0, 101, 0, &[data(true)]);
+        assert!(decoder.ingest(exp, &same, 101).unwrap().sequence_repeated);
+        let old = packet(10, 11, u32::MAX - 1, 99, 0, &[data(false)]);
+        assert!(decoder.ingest(exp, &old, 102).unwrap().sequence_reordered);
+        assert!(decoder.ingest(exp, &same, 102).unwrap().duplicate);
+        let independent = packet(10, 12, 8, 99, 0, &[template(10)]);
+        assert!(!decoder.ingest(exp, &independent, 102).unwrap().sequence_reordered);
+        let v9 = packet(9, 11, 9, 100, 3000, &[template(9)]);
+        decoder.ingest(exp, &v9, 102).unwrap();
+        let restarted = packet(9, 11, 1, 101, 100, &[data(false)]);
+        let batch = decoder.ingest(exp, &restarted, 103).unwrap();
+        assert!(batch.generation_restart);
+        assert!(!batch.sequence_reordered);
+        assert_eq!(batch.missing, 1);
+    }
+
+    #[test]
     fn isolation_expiry_restart_and_atomic_parse() {
         let exp = "127.0.0.1:55000".parse().unwrap();
         let mut d = Decoder::default();

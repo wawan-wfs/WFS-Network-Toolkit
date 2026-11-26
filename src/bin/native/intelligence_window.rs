@@ -37,6 +37,7 @@ const INTEL_HISTORY: i32 = 237;
 const INTEL_MORE: i32 = 238;
 const INTEL_IP_JOURNEY: i32 = 239;
 const INTEL_BACK: i32 = 240;
+const INTEL_CHART: i32 = 241;
 const ARCHIVE_MODE: usize = 16;
 const DEVICE_MODE: usize = 17;
 const STORAGE_MODE: usize = 18;
@@ -424,6 +425,15 @@ impl Native {
                 "Status / Bukti",
                 "Detail ringkas",
             ],
+        )?;
+        self.widget(
+            "STATIC",
+            "Bandwidth interface — pilih baris dashboard",
+            INTEL_CHART,
+            Some(Page::Intel),
+            0,
+            13, // SS_OWNERDRAW
+            [228, -234, -256, 112],
         )?;
         self.text(
             "Pilih Data Windows atau tambahkan sumber data yang berizin.",
@@ -2107,10 +2117,13 @@ impl Native {
                             format!("{} record tersimpan", stats.archived),
                         ],
                         format!(
-                            "Antrean penuh {} · writer tertutup {} · SQLite gagal {}. Error: {:?} / {:?} / {:?}. Tidak mengukur drop kernel.",
+                            "Antrean penuh {} · writer tertutup {} · SQLite gagal {}. Sequence berulang {} · reorder {} · restart v9 {}. Error: {:?} / {:?} / {:?}. Bukan pengukuran drop kernel.",
                             stats.archive_queue_full,
                             stats.archive_writer_closed,
                             stats.archive_sqlite_failed,
+                            stats.sequence_repeated,
+                            stats.sequence_reordered,
+                            stats.generation_restarts,
                             stats.error,
                             stats.archive_error,
                             stats.alert_error
@@ -3617,7 +3630,11 @@ impl Native {
         self.table_rows(INTEL_TABLE, &visible, 4);
         self.intel.details = details;
         self.intel.dashboard_targets = dashboard_targets;
+        DASHBOARD_CHART_CACHE.with(|cache| {
+            *cache.borrow_mut() = dashboard_charts.clone();
+        });
         self.intel.dashboard_charts = dashboard_charts;
+        self.layout();
         self.intel.visual_edges = visual_edges;
         self.intel.visual_series = visual_series;
         self.intel.visible_notes = visible_notes;

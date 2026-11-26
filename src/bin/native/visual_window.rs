@@ -96,6 +96,67 @@ fn vis_line(dc: HDC, a: (i32, i32), b: (i32, i32), tint: u32) {
     }
 }
 
+thread_local! {
+    static DASHBOARD_CHART_CACHE: std::cell::RefCell<std::collections::BTreeMap<usize, ni::visual::Series>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+// Owner-drawn GDI child of the main window, not a WebView or modal viewer.
+fn paint_dashboard_chart(parent: HWND, item: &DRAWITEMSTRUCT) {
+    let dc = item.hDC;
+    let r = item.rcItem;
+    fill(dc, &r, color(238, 245, 249));
+    let width = r.right - r.left;
+    let height = r.bottom - r.top;
+    if width < 120 || height < 65 {
+        return;
+    }
+    let table = unsafe { GetDlgItem(parent, INTEL_TABLE) };
+    let selected = send_native(table, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as isize);
+    let rx = color(0, 122, 125);
+    let tx = color(50, 95, 175);
+    DASHBOARD_CHART_CACHE.with(|cache| {
+        let data = cache.borrow();
+        let Some(series) = usize::try_from(selected).ok().and_then(|i| data.get(&i)) else {
+            vis_text(dc, vis_rect(r.left + 12, r.top + 5, width - 24, height - 10),
+                "Pilih baris Bandwidth interface untuk grafik RX/TX. Detail lengkap tersedia melalui Buka modul.",
+                ink(), true);
+            return;
+        };
+        let points = series.range(series.points.len(), 60);
+        let max = ni::visual::Series::max_value(points);
+        let left = r.left + 12;
+        let top = r.top + 29;
+        let plot_width = width - 24;
+        let plot_height = (height - 52).max(8);
+        vis_text(dc, vis_rect(left, r.top + 3, plot_width, 22),
+            &format!("{} · {} sampel · maks {} bps", series.label, points.len(), max), ink(), false);
+        let bottom = top + plot_height;
+        vis_line(dc, (left, bottom), (left + plot_width, bottom), line());
+        let denominator = points.len().saturating_sub(1).max(1) as i32;
+        for (is_rx, tint) in [(true, rx), (false, tx)] {
+            let mut previous = None;
+            for (i, point) in points.iter().enumerate() {
+                let value = if is_rx { point.rx_bps } else { point.tx_bps };
+                let Some(value) = value else {
+                    previous = None;
+                    continue;
+                };
+                let x = left + i as i32 * plot_width / denominator;
+                let y = bottom - ni::visual::Series::axis(value, max, plot_height);
+                if let Some(p) = previous {
+                    vis_line(dc, p, (x, y), tint);
+                }
+                fill(dc, &vis_rect(x, y, 3, 3), tint);
+                previous = Some((x, y));
+            }
+        }
+        vis_text(dc, vis_rect(left, bottom + 2, plot_width / 2, 20), "RX · hijau kebiruan", rx, false);
+        vis_text(dc, vis_rect(left + plot_width / 2, bottom + 2, plot_width / 2, 20),
+            "TX · biru | gap tidak dihubungkan", tx, false);
+    });
+}
+
 fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
     let mut client = RECT::default();
     unsafe {

@@ -19,6 +19,12 @@ pub fn control_rect([x, y, w, h]: [i32; 4], width: i32, height: i32, scale: i32)
     [x, y, w, h].map(|v| (v * scale + 48) / 96)
 }
 
+/// Reserve a native chart strip only when the logical client can retain
+/// a useful table. Compact windows keep the existing full-screen drilldown.
+pub fn dashboard_chart_rect(height: i32, scale: i32) -> Option<[i32; 4]> {
+    (height * 96 / scale.max(1) >= 650).then_some([228, -234, -256, 112])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,6 +57,20 @@ mod tests {
             assert!(copyright_y + copyright_h < h && copyright_x + copyright_w <= rail_end);
         }
     }
+    #[test]
+    fn embedded_dashboard_keeps_table_and_status_separate() {
+        assert!(dashboard_chart_rect(562, 96).is_none());
+        for (w, h, dpi) in [(1366, 720, 96), (1920, 1080, 144), (2560, 1440, 192)] {
+            let scale = client_scale(w, h, dpi);
+            let chart = dashboard_chart_rect(h, scale).unwrap();
+            let [_, table_y, _, table_h] = control_rect([228, 273, -256, -513], w, h, scale);
+            let [_, chart_y, _, chart_h] = control_rect(chart, w, h, scale);
+            let [_, status_y, _, _] = control_rect([228, -113, -554, 30], w, h, scale);
+            assert!(table_h > 0 && table_y + table_h < chart_y);
+            assert!(chart_y + chart_h < status_y);
+        }
+    }
+
     #[test]
     fn intelligence_filters_and_router_buttons_do_not_overlap() {
         for (w, h, dpi) in [
