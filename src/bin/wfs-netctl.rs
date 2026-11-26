@@ -123,6 +123,10 @@ fn run() -> wfs_network_toolkit::Result<()> {
             ni::ipam_notes::recover(Path::new(source), Path::new(destination))?;
             println!("Salinan IPAM dipulihkan ke berkas baru; sumber tidak diubah.");
         }
+        ["poll-health", path, authority] => {
+            let records = ni::poll_health::page(Path::new(path), authority)?;
+            println!("{}", serde_json::to_string_pretty(&records).map_err(|e| e.to_string())?);
+        }
         ["archive-info"] => {
             let path = store::default_path()?;
             if !path.exists() {
@@ -223,7 +227,7 @@ fn run() -> wfs_network_toolkit::Result<()> {
             println!("{}", w::recover(id)?);
         }
         _ => println!(
-            "WeNet Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  dhcp6-history <file.sqlite3> <authority> [before-utc]\n  dhcp6-export-summary <file.sqlite3> <authority> <new.json>\n  dhcp6-backup <file.sqlite3> <new.sqlite3> --confirm\n  dhcp6-recover <backup.sqlite3> <new.sqlite3> --confirm\n  ipam-overlap <file.sqlite3> <scope|CIDR|label/reserved|alias|tag|note>\n  ipam-recover <backup.sqlite3> <new.sqlite3> --confirm\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
+            "WeNet Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  dhcp6-history <file.sqlite3> <authority> [before-utc]\n  dhcp6-export-summary <file.sqlite3> <authority> <new.json>\n  dhcp6-backup <file.sqlite3> <new.sqlite3> --confirm\n  dhcp6-recover <backup.sqlite3> <new.sqlite3> --confirm\n  ipam-overlap <file.sqlite3> <scope|CIDR|label/reserved|alias|tag|note>\n  ipam-recover <backup.sqlite3> <new.sqlite3> --confirm\n  poll-health <file.sqlite3> <authority>\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
         ),
     }
     Ok(())

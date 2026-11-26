@@ -89,7 +89,7 @@ const INTEL_MODES: [&str; 31] = [
 const INTEL_ROW_LIMIT: usize = 1_000;
 
 type RouterData = (Box<RouterSnapshot>, Vec<Observation>, Vec<Observation>);
-type PollResult = std::result::Result<(RouterData, Outcome, Option<String>), Outcome>;
+type PollResult = (std::result::Result<(RouterData, Outcome, Option<String>), Outcome>, bool);
 fn prepare_router(s: RouterSnapshot) -> RouterData {
     let topology = network_map::topology(&s);
     let inventory = network_map::inventory(&s);
@@ -102,6 +102,7 @@ enum IntelReply {
     Router(RouterData),
     RouterHistory(String, Box<Views>),
     RouterArchived,
+    PollHealth(String, Vec<ni::poll_health::Record>),
     Import(TrafficImport),
     Export(PathBuf),
     Collector(Collector),
@@ -162,6 +163,7 @@ struct IntelState {
     poll_auth: std::collections::BTreeMap<String, (Authority, std::sync::Arc<nw::Credentials>)>,
     poll_rx: Option<Receiver<PollResult>>,
     poll_save_errors: std::collections::BTreeMap<String, String>,
+    poll_health: Option<(String, Vec<ni::poll_health::Record>)>,
     router_history: Option<(String, Box<Views>)>,
     dashboard_targets: Vec<usize>,
     dashboard_charts: std::collections::BTreeMap<usize, ni::visual::Series>,
@@ -711,10 +713,10 @@ impl Native {
     fn poll_router_step(&mut self) {
         let now = std::time::Instant::now();
         if let Some(rx) = &self.intel.poll_rx {
-            let reply = match rx.try_recv() {
+            let (reply, health_saved) = match rx.try_recv() {
                 Ok(reply) => reply,
                 Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => Err(Outcome::Other),
+                Err(TryRecvError::Disconnected) => (Err(Outcome::Other), false),
             };
             self.intel.poll_rx = None;
             let key = self
@@ -735,8 +737,12 @@ impl Native {
                 if let Ok((data, _, warning)) = reply {
                     self.apply_router(data);
                     if let Some(w) = warning {
-                        self.intel.poll_save_errors.insert(key, w);
+                        self.intel.poll_save_errors.insert(key.clone(), w);
                     }
+                }
+                if !health_saved {
+                    self.intel.poll_save_errors.entry(key).or_default()
+                        .push_str(" Histori kesehatan tidak tersimpan.");
                 }
             }
             if self.page == Page::Intel
@@ -773,18 +779,36 @@ impl Native {
         let path = self.primary_archive_path();
         let (tx, rx) = mpsc::channel();
         let worker=thread::Builder::new().name("wfs-router-poll".into()).spawn(move||{
-            let result=nw::router_snapshot_cancel(&authority,&auth,&cancel).map_err(|e|Outcome::from_failure(&e)).map(|s|{
-                let outcome=if s.coverage.iter().all(|c|c.state==ni::CoverageState::CompleteSnapshot) {Outcome::Complete} else {Outcome::Partial};
-                let archive=cancel.check().and_then(|_|{
-                    let path=path?;
-                    let mut db=Archive::writer(&path)?;
-                    cancel.check()?;
-                    db.save_router_sample(&Sample::capture(&s))
+            use ni::poll_health::ArchiveState;
+            let started = std::time::Instant::now();
+            let result = nw::router_snapshot_cancel(&authority, &auth, &cancel)
+                .map_err(|e| Outcome::from_failure(&e))
+                .map(|s| {
+                    let outcome = if !s.coverage.is_empty() && s.coverage.iter().all(|c| c.state == ni::CoverageState::CompleteSnapshot) {
+                        Outcome::Complete
+                    } else {
+                        Outcome::Partial
+                    };
+                    let archive = cancel.check().and_then(|_| {
+                        let path = path.as_ref().map_err(Clone::clone)?;
+                        let mut db = Archive::writer(path)?;
+                        cancel.check()?;
+                        db.save_router_sample(&Sample::capture(&s))
+                    });
+                    let data = prepare_router(s);
+                    (data, outcome, archive.err().map(|_| "Histori tidak tersimpan. Periksa izin, kuota atau kunci SQLite.".into()))
                 });
-                let data=prepare_router(s);
-                (data,outcome,archive.err().map(|_|"Histori tidak tersimpan. Periksa izin, kuota atau kunci SQLite.".into()))
+            let (outcome, archive) = match &result {
+                Ok((_, outcome, warning)) => (*outcome, if warning.is_some() { ArchiveState::Failed } else { ArchiveState::Saved }),
+                Err(outcome) => (*outcome, ArchiveState::NotAttempted),
+            };
+            let health_saved = !cancel.requested() && path.as_ref().is_ok_and(|path| {
+                ni::poll_health::append(
+                    &path.with_file_name("poll-health-v1.sqlite3"), &authority.display(),
+                    ni::now(), started.elapsed().as_millis().min(3_600_000) as u64, outcome, archive,
+                ).is_ok()
             });
-            let _=tx.send(result);
+            let _ = tx.send((result, health_saved));
         });
         if worker.is_ok() {
             self.intel.poll_rx = Some(rx);
@@ -1096,6 +1120,7 @@ impl Native {
         if mode == POLL_MODE {
             set(self.h(INTEL_ROUTER), "Mulai polling");
             set(self.h(INTEL_PROBE), "Hentikan target");
+            set(self.h(INTEL_HISTORY), "Histori kesehatan");
         }
         if matches!(mode, TREND_MODE | LEASE_MODE) {
             set(self.h(INTEL_HISTORY), "Arsip UTC");
@@ -1202,6 +1227,9 @@ impl Native {
                 select(self.h(INTEL_MODE), SYSLOG_MODE);
                 self.intel.mode = SYSLOG_MODE;
                 self.intel_mode_labels(SYSLOG_MODE);
+            }
+            Ok(IntelReply::PollHealth(key, rows)) => {
+                self.intel.poll_health = Some((key, rows));
             }
             Ok(IntelReply::Dhcp6History(key, rows)) => {
                 self.intel.dhcp6_history = Some((key, rows));
@@ -1735,6 +1763,14 @@ impl Native {
                 if let Some(collector) = self.intel.collector.take() {
                     self.start_intel(move || Ok(IntelReply::Stopped(Box::new(collector.stop()))))?;
                 }
+            }
+            INTEL_HISTORY if selection(self.h(INTEL_MODE)) == POLL_MODE => {
+                let authority = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
+                let path = self.primary_archive_path()?.with_file_name("poll-health-v1.sqlite3");
+                self.start_intel(move || {
+                    let rows = ni::poll_health::page(&path, &authority)?;
+                    Ok(IntelReply::PollHealth(authority, rows))
+                })?;
             }
             INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), TREND_MODE | LEASE_MODE) => {
                 self.archived_router_views()?
@@ -3226,7 +3262,17 @@ impl Native {
                         },
                     );
                 }
-                "Isi host dan interval. Mulai atau hentikan target. Polling tidak aktif otomatis setelah keluar."
+                if let Some((key, records)) = &self.intel.poll_health {
+                    for record in records {
+                        push(
+                            [key.clone(), format!("UTC {}", record.stamp),
+                                record.outcome.into(), format!("{} ms", record.elapsed_ms)],
+                            &|| format!("Histori lokal #{} · {} · penyimpanan snapshot: {}. Bukan bukti status online saat ini.",
+                                record.id, record.outcome, record.archive_state),
+                        );
+                    }
+                }
+                "Isi host dan interval. Mulai/hentikan target; Histori kesehatan menampilkan 100 hasil terakhir per router (512/router, 4096 total). Tidak aktif otomatis setelah keluar."
             }
             ALERT_MODE => {
                 for event in &self.intel.alert_rows {

@@ -21,6 +21,7 @@ pub mod ipam_notes;
 pub mod network_map;
 pub mod overview;
 pub mod polling;
+pub mod poll_health;
 pub mod router;
 pub mod router_history;
 pub mod store;
