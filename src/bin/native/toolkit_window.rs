@@ -1026,6 +1026,8 @@ impl Native {
                 INTEL_EXPORT => {
                     normal
                         && (matches!(selection(self.h(INTEL_MODE)), 0 | STORAGE_MODE | NOTES_MODE)
+                            || selection(self.h(INTEL_MODE)) == DHCP6_HISTORY_MODE
+                                && self.intel.dhcp6_history.is_some()
                             || selection(self.h(INTEL_MODE)) == ARCHIVE_MODE
                                 && self.intel.archive_query.is_some())
                 }
@@ -1048,12 +1050,12 @@ impl Native {
                 INTEL_BACK => normal,
                 INTEL_MORE => {
                     normal
-                        && selection(self.h(INTEL_MODE)) == ARCHIVE_MODE
-                        && self
-                            .intel
-                            .archived
-                            .as_ref()
-                            .is_some_and(|p| p.next.is_some())
+                        && match selection(self.h(INTEL_MODE)) {
+                            ARCHIVE_MODE => self.intel.archived.as_ref().is_some_and(|p| p.next.is_some()),
+                            DHCP6_HISTORY_MODE => self.intel.dhcp6_history.as_ref()
+                                .is_some_and(|(_, rows)| rows.len() == 20),
+                            _ => false,
+                        }
                 }
                 INTEL_DETAILS => normal && !self.intel.details.is_empty(),
                 INTEL_MODE | INTEL_FILTER | INTEL_SEARCH | INTEL_RESET_FILTER | INTEL_REFRESH

@@ -289,6 +289,12 @@ pub fn backup(path: &Path, dest: &Path) -> Result<()> {
 /// Exact operator scope only; overlapping prefixes are not proof of an
 /// address conflict, reservation enforcement or physical reachability.
 pub fn overlaps(path: &Path, candidate: &Note) -> Result<Vec<Note>> {
+    overlaps_in(&page(path)?, candidate)
+}
+
+/// Preview from an already loaded snapshot. Never use this as a lock or as
+/// proof of a free address. The existing optimistic revision check still applies.
+pub fn overlaps_in(rows: &[Note], candidate: &Note) -> Result<Vec<Note>> {
     candidate.validate()?;
     let parse = |value: &str| -> Option<(IpAddr, super::overview::Prefix)> {
         let (ip, bits) = value.split_once('/')?;
@@ -296,14 +302,15 @@ pub fn overlaps(path: &Path, candidate: &Note) -> Result<Vec<Note>> {
         Some((ip, super::overview::Prefix::new(ip, bits.parse().ok()?)?))
     };
     let (ip, prefix) = parse(&candidate.cidr).ok_or("CIDR tidak valid.")?;
-    Ok(page(path)?
-        .into_iter()
+    Ok(rows
+        .iter()
         .filter(|row| {
             row.active
                 && row.scope == candidate.scope
                 && parse(&row.cidr)
                     .is_some_and(|(other, net)| prefix.contains(other) || net.contains(ip))
         })
+        .cloned()
         .collect())
 }
 

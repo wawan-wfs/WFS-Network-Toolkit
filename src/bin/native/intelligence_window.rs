@@ -914,6 +914,42 @@ impl Native {
         self.render_intel();
         Ok(())
     }
+    fn load_older_dhcp6_history(&mut self) -> Result<()> {
+        let (authority, rows) = self.intel.dhcp6_history.as_ref()
+            .ok_or("Muat histori DHCPv6 terlebih dahulu.")?;
+        let stamp = rows.last().ok_or("Tidak ada halaman lebih lama.")?.stamp;
+        let authority = authority.clone();
+        let path = self.dhcp6_history_path()?;
+        self.start_intel(move || {
+            let rows = ni::dhcp6_history::page_before(&path, &authority, Some(stamp))?;
+            Ok(IntelReply::Dhcp6History(authority, rows))
+        })
+    }
+    fn recover_independent_metadata(&mut self, dhcp: bool) -> Result<()> {
+        let active = if dhcp { self.dhcp6_history_path()? } else { self.notes_path()? };
+        let filter = "SQLite (*.sqlite3)\0*.sqlite3\0";
+        let Some(source) = typed_file_dialog(self.hwnd, false, "", filter, "sqlite3")? else {
+            return Ok(());
+        };
+        if popup(self.hwnd,
+            "Validasi seluruh backup dan pulihkan ke file BARU? Database aktif dan sumber tidak akan ditimpa. Salinan tidak otomatis diaktifkan.",
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES {
+            return Ok(());
+        }
+        let name = if dhcp { "WeNet-DHCPv6-recovered.sqlite3" } else { "WeNet-IPAM-recovered.sqlite3" };
+        let Some(destination) = typed_file_dialog(self.hwnd, true, name, filter, "sqlite3")? else {
+            return Ok(());
+        };
+        check_recovery_destination(&destination, &active)?;
+        self.start_intel(move || {
+            if dhcp {
+                ni::dhcp6_history::recover(&source, &destination)?;
+            } else {
+                ni::ipam_notes::recover(&source, &destination)?;
+            }
+            Ok(IntelReply::Export(destination))
+        })
+    }
     fn notes_path(&self) -> Result<PathBuf> {
         Ok(self
             .primary_archive_path()?
@@ -959,14 +995,23 @@ impl Native {
             };
             (draft, expected)
         };
+        let overlap_count = if undo {
+            0
+        } else {
+            ni::ipam_notes::overlaps_in(&self.intel.ipam_notes, &draft)?
+                .iter()
+                .filter(|n| n.cidr != draft.cidr)
+                .count()
+        };
         if popup(
             self.hwnd,
             &format!(
-                "{} metadata lokal untuk {} / {} (revisi {})? Tidak ada perubahan jaringan atau reservasi router.",
+                "{} metadata lokal untuk {} / {} (revisi {})?\n{} prefix lain tumpang tindih pada snapshot scope operator yang sama. Tidak membuktikan konflik assignment. Tidak ada perubahan jaringan atau reservasi router.",
                 if undo { "Undo" } else { "Simpan" },
                 draft.scope,
                 draft.cidr,
-                expected
+                expected,
+                overlap_count
             ),
             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
         ) == IDYES
@@ -1038,7 +1083,12 @@ impl Native {
             set(self.h(INTEL_RECORD), "Simpan DHCPv6");
             set(self.h(INTEL_HISTORY), "Histori DHCPv6");
         }
+        if mode == DHCP6_HISTORY_MODE {
+            set(self.h(INTEL_EXPORT), "Ekspor/backup");
+            set(self.h(INTEL_IMPORT), "Pulihkan…");
+        }
         if mode == NOTES_MODE {
+            set(self.h(INTEL_IMPORT), "Pulihkan…");
             set(self.h(INTEL_EXPORT), "Ekspor/backup");
             set(self.h(INTEL_RECORD), "Simpan metadata");
             set(self.h(INTEL_HISTORY), "Undo metadata");
@@ -1445,6 +1495,9 @@ impl Native {
                     }
                 }
             }
+            INTEL_MORE if selection(self.h(INTEL_MODE)) == DHCP6_HISTORY_MODE => {
+                self.load_older_dhcp6_history()?;
+            }
             INTEL_MORE => {
                 if let Some(next) = self.intel.archived.as_ref().and_then(|p| p.next)
                     && let Some(q) = &self.intel.archive_query
@@ -1619,6 +1672,9 @@ impl Native {
                     self.start_intel(move || ni::syslog::read(&path).map(IntelReply::Syslog))?;
                     self.render_intel();
                 }
+            }
+            INTEL_IMPORT if matches!(selection(self.h(INTEL_MODE)), NOTES_MODE | DHCP6_HISTORY_MODE) => {
+                self.recover_independent_metadata(selection(self.h(INTEL_MODE)) == DHCP6_HISTORY_MODE)?;
             }
             INTEL_IMPORT => {
                 if let Some(path) = typed_file_dialog(
@@ -1804,6 +1860,35 @@ impl Native {
                 }
             }
             INTEL_EXPORT => {
+                if selection(self.h(INTEL_MODE)) == DHCP6_HISTORY_MODE {
+                    let authority = self.intel.dhcp6_history.as_ref()
+                        .map(|(key, _)| key.clone())
+                        .ok_or("Muat histori DHCPv6 terlebih dahulu.")?;
+                    let source = self.dhcp6_history_path()?;
+                    let redact = checked(self.h(INTEL_REDACT));
+                    let (name, filter, ext) = if redact {
+                        ("WeNet-DHCPv6-summary.json", "JSON (*.json)\0*.json\0", "json")
+                    } else {
+                        ("WeNet-DHCPv6-backup.sqlite3", "SQLite (*.sqlite3)\0*.sqlite3\0", "sqlite3")
+                    };
+                    if !redact && popup(self.hwnd,
+                        "Backup berisi semua scope router, prefix dan histori, tanpa penyamaran. DUID tidak disimpan. Lanjutkan?",
+                        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES {
+                        return Ok(());
+                    }
+                    let Some(dest) = typed_file_dialog(self.hwnd, true, name, filter, ext)? else {
+                        return Ok(());
+                    };
+                    self.start_intel(move || {
+                        if redact {
+                            ni::dhcp6_history::export_summary(&source, &authority, &dest)?;
+                        } else {
+                            ni::dhcp6_history::backup(&source, &dest)?;
+                        }
+                        Ok(IntelReply::Export(dest))
+                    })?;
+                    return Ok(());
+                }
                 if selection(self.h(INTEL_MODE)) == NOTES_MODE {
                     let source = self.notes_path()?;
                     let redact = checked(self.h(INTEL_REDACT));
@@ -2300,7 +2385,7 @@ impl Native {
                         },
                     );
                 }
-                "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Pilih Isi editor untuk revisi; Simpan atau Undo. Reset sebelum membuat key baru. Backup DB metadata terpisah."
+                "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Simpan menampilkan overlap snapshot scope yang sama. Isi editor, Undo, backup dan Pulihkan salinan baru. Reset sebelum membuat key baru."
             }
             SYSLOG_MODE => {
                 if let Some(summary) = &self.intel.syslog_summary {
@@ -2381,7 +2466,7 @@ impl Native {
                             },
                         );
                     }
-                    "Histori eksak router yang dimuat; ubah host dan klik Histori DHCPv6 untuk muat ulang. Maksimum 20 snapshot terbaru; gap bukan bukti prefix bebas."
+                    "Histori eksak router yang dimuat; 20 snapshot per halaman. Lanjut untuk halaman lebih lama; Histori DHCPv6 untuk terbaru. Samarkan untuk ringkasan; hapus centang untuk backup semua router. Gap bukan bukti prefix bebas."
                 } else {
                     "Masukkan host router lalu Histori DHCPv6. Gunakan Simpan DHCPv6 untuk menyimpan snapshot yang telah dibaca."
                 }
@@ -3573,7 +3658,7 @@ impl Native {
         unsafe {
             ShowWindow(
                 self.h(INTEL_MORE),
-                if self.page == Page::Intel && mode == ARCHIVE_MODE {
+                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE) {
                     SW_SHOW
                 } else {
                     SW_HIDE

@@ -314,30 +314,43 @@ pub fn export_summary(path: &Path, authority: &str, destination: &Path) -> Resul
     if !path.try_exists().map_err(error)? {
         return Err("Histori DHCPv6 belum tersedia.".into());
     }
-    let mut cursor = None;
+    if Authority::parse(authority)?.display() != authority {
+        return Err("Authority histori tidak kanonik.".into());
+    }
+    let conn = open(path, false)?;
+    let mut statement = conn
+        .prepare("SELECT stamp,payload FROM dhcp6_sample WHERE authority=?1 ORDER BY stamp DESC LIMIT 121")
+        .map_err(error)?;
+    let mut rows = statement.query([authority]).map_err(error)?;
     let mut counts = [0usize; 3];
     let mut stored = 0usize;
     let mut reported = 0usize;
-    // Schema contract caps one router at 120 snapshots.
-    for _ in 0..6 {
-        let samples = page_before(path, authority, cursor)?;
-        if samples.is_empty() {
-            break;
+    let mut total = 0;
+    // One statement provides one consistent read snapshot, including if a
+    // collector writes during export. Never publish a partial aggregation.
+    while let Some(row) = rows.next().map_err(error)? {
+        let stamp: i64 = row.get(0).map_err(error)?;
+        let payload = row.get_ref(1).map_err(error)?.as_str().map_err(error)?;
+        total += 1;
+        if total > 120 || stamp < 0 || payload.len() > MAX_BYTES {
+            return Err("Histori di luar batas ekspor.".into());
         }
-        cursor = samples.last().map(|s| s.stamp);
-        for s in samples {
-            counts[match s.coverage {
-                CoverageState::CompleteSnapshot => 0,
-                CoverageState::Partial => 1,
-                CoverageState::Unavailable => 2,
-            }] += 1;
-            stored = stored.saturating_add(s.rows.len());
-            reported = reported.saturating_add(s.reported);
+        let s: Capture = serde_json::from_str(payload).map_err(error)?;
+        s.validate()?;
+        if s.authority != authority || s.stamp != stamp as u64 {
+            return Err("Identitas histori tidak cocok dengan key.".into());
         }
+        counts[match s.coverage {
+            CoverageState::CompleteSnapshot => 0,
+            CoverageState::Partial => 1,
+            CoverageState::Unavailable => 2,
+        }] += 1;
+        stored = stored.saturating_add(s.rows.len());
+        reported = reported.saturating_add(s.reported);
     }
-    if !page_before(path, authority, cursor)?.is_empty() && cursor.is_some() {
-        return Err("Histori melebihi batas atau berubah saat ekspor.".into());
-    }
+    drop(rows);
+    drop(statement);
+    drop(conn);
     let summary = serde_json::json!({
         "schema": 1,
         "complete_snapshots": counts[0],
