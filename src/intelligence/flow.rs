@@ -39,6 +39,64 @@ pub struct Flow {
     pub datagram_hash: [u8; 32],
     pub ordinal: u32,
 }
+/// Optional exporter-reported IPFIX fields; not inferred NAT mappings or
+/// traffic multipliers. Kept separate from the existing persisted Flow schema.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Provenance {
+    pub sampling_interval_legacy: Option<u32>,
+    pub sampling_algorithm_legacy: Option<u8>,
+    pub sampling_packet_interval: Option<u32>,
+    pub sampling_packet_space: Option<u32>,
+    pub post_source_v4: Option<Ipv4Addr>,
+    pub post_destination_v4: Option<Ipv4Addr>,
+    pub post_source_v6: Option<Ipv6Addr>,
+    pub post_destination_v6: Option<Ipv6Addr>,
+    pub post_source_port: Option<u16>,
+    pub post_destination_port: Option<u16>,
+}
+impl Provenance {
+    fn read_field(&mut self, id: u16, v: &[u8]) {
+        let number = || integer(v).and_then(|n| u32::try_from(n).ok());
+        match id {
+            34 => self.sampling_interval_legacy = number().filter(|&n| n > 0),
+            35 => self.sampling_algorithm_legacy = number().and_then(|n| u8::try_from(n).ok()),
+            305 => self.sampling_packet_interval = number().filter(|&n| n > 0),
+            306 => self.sampling_packet_space = number(),
+            225 => self.post_source_v4 = <[u8; 4]>::try_from(v).ok().map(Ipv4Addr::from),
+            226 => self.post_destination_v4 = <[u8; 4]>::try_from(v).ok().map(Ipv4Addr::from),
+            281 => self.post_source_v6 = <[u8; 16]>::try_from(v).ok().map(Ipv6Addr::from),
+            282 => self.post_destination_v6 = <[u8; 16]>::try_from(v).ok().map(Ipv6Addr::from),
+            227 => self.post_source_port = number().and_then(|n| u16::try_from(n).ok()),
+            228 => self.post_destination_port = number().and_then(|n| u16::try_from(n).ok()),
+            _ => {}
+        }
+    }
+    pub fn has_sampling(&self) -> bool {
+        self.sampling_interval_legacy.is_some() || self.sampling_algorithm_legacy.is_some()
+            || self.sampling_packet_interval.is_some() || self.sampling_packet_space.is_some()
+    }
+    pub fn has_nat(&self) -> bool {
+        self.post_source_v4.is_some() || self.post_destination_v4.is_some()
+            || self.post_source_v6.is_some() || self.post_destination_v6.is_some()
+            || self.post_source_port.is_some() || self.post_destination_port.is_some()
+    }
+    pub fn summary(&self) -> String {
+        format!(
+            "Sampling legacy interval {:?}, algorithm {:?}; packet interval {:?}, space {:?}. NAT post-observation v4 {:?} → {:?}, v6 {:?} → {:?}, port {:?} → {:?}. Hanya field terlapor; tidak mengalikan counter.",
+            self.sampling_interval_legacy, self.sampling_algorithm_legacy,
+            self.sampling_packet_interval, self.sampling_packet_space,
+            self.post_source_v4, self.post_destination_v4, self.post_source_v6,
+            self.post_destination_v6, self.post_source_port, self.post_destination_port
+        )
+    }
+}
+pub type FlowIdentity = (SocketAddr, u16, u32, [u8; 32], u32);
+impl Flow {
+    pub fn identity(&self) -> FlowIdentity {
+        (self.exporter, self.version, self.domain, self.datagram_hash, self.ordinal)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cidr {
     ip: IpAddr,
@@ -137,6 +195,7 @@ pub struct Decoder {
 #[derive(Default)]
 pub struct Batch {
     pub flows: Vec<Flow>,
+    pub provenance: Vec<Provenance>,
     pub missing: u32,
     pub skipped: u32,
     pub duplicate: bool,
@@ -292,6 +351,7 @@ impl Decoder {
                     if batch.flows.len() >= 8_192 {
                         return Err("Batas baris per datagram tercapai.".into());
                     }
+                    let mut provenance = Provenance::default();
                     let mut v4 = (None, None);
                     let mut v6 = (None, None);
                     let (
@@ -317,6 +377,9 @@ impl Decoder {
                         let v = take(&mut set, len)?;
                         if f.enterprise {
                             continue;
+                        }
+                        if version == 10 {
+                            provenance.read_field(f.id, v);
                         }
                         match f.id {
                             8 => {
@@ -355,6 +418,7 @@ impl Decoder {
                             .filter(|(a, b)| usable(a) && usable(b))
                             .or_else(|| v6.0.zip(v6.1).filter(|(a, b)| usable(a) && usable(b)));
                     if let Some((source, destination)) = pair {
+                        batch.provenance.push(provenance);
                         batch.flows.push(Flow {
                             exporter,
                             domain,
@@ -380,7 +444,7 @@ impl Decoder {
                 }
             } else {
                 batch.skipped += 1;
-            } // options/sampling are not interpreted
+            } // Options templates are not interpreted; no inferred sampling rate.
         }
         // Commit diagnostic state only after successful decoding. Same sequence
         // can be valid (IPFIX template-only messages); never count it as loss.
@@ -537,6 +601,8 @@ pub struct Stats {
     pub duplicate: u64,
     pub skipped: u64,
     pub missing_templates: u64,
+    pub sampled_fields: u64,
+    pub nat_fields: u64,
     pub sequence_reordered: u64,
     pub sequence_repeated: u64,
     pub generation_restarts: u64,
@@ -560,6 +626,7 @@ struct Buffer {
     stats: Stats,
     profile_stats: BTreeMap<(IpAddr, u32), Stats>,
     flows: VecDeque<Flow>,
+    provenance: BTreeMap<FlowIdentity, Provenance>,
 }
 pub struct Collector {
     pub config: CollectorConfig,
@@ -786,6 +853,8 @@ impl Collector {
                                         stats.sequence_reordered += u64::from(b.sequence_reordered);
                                         stats.sequence_repeated += u64::from(b.sequence_repeated);
                                         stats.generation_restarts += u64::from(b.generation_restart);
+                                        stats.sampled_fields += b.provenance.iter().filter(|p| p.has_sampling()).count() as u64;
+                                        stats.nat_fields += b.provenance.iter().filter(|p| p.has_nat()).count() as u64;
                                     }
                                     Err(_) => stats.invalid += 1,
                                 }
@@ -800,10 +869,17 @@ impl Collector {
                                     data.stats.sequence_reordered += u64::from(b.sequence_reordered);
                                     data.stats.sequence_repeated += u64::from(b.sequence_repeated);
                                     data.stats.generation_restarts += u64::from(b.generation_restart);
-                                    for f in b.flows {
+                                    data.stats.sampled_fields += b.provenance.iter().filter(|p| p.has_sampling()).count() as u64;
+                                    data.stats.nat_fields += b.provenance.iter().filter(|p| p.has_nat()).count() as u64;
+                                    for (f, provenance) in b.flows.into_iter().zip(b.provenance) {
                                         if data.flows.len() == MAX_ROWS {
-                                            data.flows.pop_front();
+                                            if let Some(old) = data.flows.pop_front() {
+                                                data.provenance.remove(&old.identity());
+                                            }
                                             data.stats.evicted += 1;
+                                        }
+                                        if provenance.has_sampling() || provenance.has_nat() {
+                                            data.provenance.insert(f.identity(), provenance);
                                         }
                                         data.flows.push_back(f);
                                     }
@@ -885,6 +961,9 @@ impl Collector {
                 Some((label, stats.clone()))
             })
             .collect()
+    }
+    pub fn provenance(&self) -> BTreeMap<FlowIdentity, Provenance> {
+        self.data.lock().map_or_else(|_| BTreeMap::new(), |b| b.provenance.clone())
     }
     pub fn snapshot(&self) -> (Stats, Vec<Flow>) {
         self.read_buffer(true)
@@ -1182,6 +1261,36 @@ mod tests {
             assert_eq!(summarize(&a)[0].octets, 200);
         }
     }
+    #[test]
+    fn ipfix_provenance_is_record_local_and_does_not_scale_counters() {
+        let exp = "127.0.0.1:55000".parse().unwrap();
+        let mut decoder = Decoder::default();
+        let fields = [(8u16, 4u16), (12, 4), (1, 8), (305, 4), (306, 4), (225, 4), (227, 2)];
+        let mut template_bytes = 256u16.to_be_bytes().to_vec();
+        template_bytes.extend((fields.len() as u16).to_be_bytes());
+        for (id, len) in fields {
+            template_bytes.extend(id.to_be_bytes());
+            template_bytes.extend(len.to_be_bytes());
+        }
+        let mut data_bytes = vec![192, 0, 2, 1, 203, 0, 113, 2];
+        data_bytes.extend(400u64.to_be_bytes());
+        data_bytes.extend(2u32.to_be_bytes());
+        data_bytes.extend(98u32.to_be_bytes());
+        data_bytes.extend([198, 51, 100, 9]);
+        data_bytes.extend(1234u16.to_be_bytes());
+        let packet = packet(10, 11, 1, 100, 0, &[set(2, &template_bytes), set(256, &data_bytes)]);
+        let batch = decoder.ingest(exp, &packet, 100).unwrap();
+        assert_eq!(batch.flows.len(), 1);
+        assert_eq!(batch.flows[0].octets, Some(400));
+        let p = &batch.provenance[0];
+        assert_eq!(p.sampling_packet_interval, Some(2));
+        assert_eq!(p.sampling_packet_space, Some(98));
+        assert_eq!(p.post_source_v4, Some(Ipv4Addr::new(198, 51, 100, 9)));
+        assert_eq!(p.post_source_port, Some(1234));
+        assert!(p.has_sampling() && p.has_nat());
+        assert!(decoder.ingest(exp, &packet, 101).unwrap().provenance.is_empty());
+    }
+
     #[test]
     fn sequence_diagnostics_isolate_sessions_wrap_and_restart() {
         let exp = "127.0.0.1:55000".parse().unwrap();

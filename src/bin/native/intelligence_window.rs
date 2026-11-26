@@ -2946,6 +2946,7 @@ impl Native {
                     let (stat, rows) = collector.snapshot();
                     match mode {
                         9 => {
+                            let provenance = collector.provenance();
                             for f in rows.iter().rev() {
                                 let source = f.source_port.map_or_else(
                                     || f.source.to_string(),
@@ -2972,7 +2973,7 @@ impl Native {
                                     ],
                                     &|| {
                                         format!(
-                                            "{source} → {dest}\nExporter {} · domain {}\nInterface masuk/keluar {} / {}\nByte/paket {} / {}\nExport UTC {} · diterima UTC {}\nSampling tidak diketahui. Tidak menghitung trafik yang tidak dikirim exporter.",
+                                            "{source} → {dest}\nExporter {} · domain {}\nInterface masuk/keluar {} / {}\nByte/paket {} / {}\nExport UTC {} · diterima UTC {}\n{}\nTidak menghitung trafik yang tidak dikirim exporter.",
                                             f.exporter,
                                             f.domain,
                                             display_opt(f.ingress),
@@ -2980,7 +2981,11 @@ impl Native {
                                             display_opt(f.octets),
                                             display_opt(f.packets),
                                             f.export_at,
-                                            f.received_at
+                                            f.received_at,
+                                            provenance.get(&f.identity()).map_or_else(
+                                                || "Sampling/NAT tidak diketahui.".into(),
+                                                flow::Provenance::summary
+                                            )
                                         )
                                     },
                                 );

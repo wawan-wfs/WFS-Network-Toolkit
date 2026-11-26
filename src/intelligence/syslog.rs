@@ -72,6 +72,53 @@ pub fn summarize(bytes: &[u8]) -> Result<Summary> {
     }
     Ok(out)
 }
+/// RFC 5425 octet-counting frame parser. This function is transport-agnostic:
+/// neither a successful parse nor the Syslog header proves sender authentication.
+/// A future TLS receiver must verify the peer before invoking this routine.
+pub fn summarize_octet_counted(mut input: &[u8]) -> Result<Summary> {
+    if input.len() > MAX_BYTES {
+        return Err("Stream Syslog melewati batas 1 MiB.".into());
+    }
+    let mut out = Summary::default();
+    let mut frames = 0;
+    while !input.is_empty() {
+        frames += 1;
+        if frames > MAX_LINES {
+            return Err("Jumlah frame Syslog melewati batas.".into());
+        }
+        let separator = input.iter().take(6).position(|&b| b == b' ')
+            .ok_or("Panjang frame Syslog tidak valid.")?;
+        let prefix = &input[..separator];
+        if prefix.is_empty() || prefix[0] == b'0' || !prefix.iter().all(u8::is_ascii_digit) {
+            return Err("Prefix frame Syslog tidak kanonik.".into());
+        }
+        let len = std::str::from_utf8(prefix).map_err(|_| "Panjang frame tidak valid.")?
+            .parse::<usize>().map_err(|_| "Panjang frame tidak valid.")?;
+        input = &input[separator + 1..];
+        if len == 0 || len > MAX_LINE || len > input.len() {
+            return Err("Frame Syslog terlalu panjang atau terpotong.".into());
+        }
+        let (frame, rest) = input.split_at(len);
+        input = rest;
+        let group = std::str::from_utf8(frame).ok()
+            .filter(|s| !s.chars().any(|c| c.is_control() && c != '\t'))
+            .and_then(priority);
+        if let Some(group) = group {
+            *out.groups.entry(group).or_default() += 1;
+            out.accepted += 1;
+        } else {
+            out.rejected += 1;
+        }
+    }
+    Ok(out)
+}
+pub fn read_octet_counted(path: &Path) -> Result<Summary> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).map_err(|e| e.to_string())?
+        .take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    summarize_octet_counted(&bytes)
+}
+
 pub fn read(path: &Path) -> Result<Summary> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
@@ -94,6 +141,21 @@ mod tests {
         assert_eq!(summary.groups[&(Format::Rfc5424Header, 4, 2)], 1);
         assert_eq!(summary.groups[&(Format::LegacyPriority, 1, 5)], 1);
         assert!(!format!("{summary:?}").contains("PRIVATE"));
+    }
+
+    #[test]
+    fn octet_counting_never_treats_embedded_newline_as_another_frame() {
+        let a = "<13>message";
+        let b = "<14>second";
+        let input = format!("{} {a}{} {b}", a.len(), b.len());
+        let out = summarize_octet_counted(input.as_bytes()).unwrap();
+        assert_eq!(out.accepted, 2);
+        let bad = "<13>one\n<14>two";
+        let framed = format!("{} {bad}", bad.len());
+        assert_eq!(summarize_octet_counted(framed.as_bytes()).unwrap().rejected, 1);
+        for invalid in ["0 ", "01 x", "99999 x", "4 abc", "+1 x", "2", "1 xtrailing"] {
+            assert!(summarize_octet_counted(invalid.as_bytes()).is_err(), "{invalid}");
+        }
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod device;
 pub mod dhcp6;
 pub mod dhcp6_history;
 pub mod flow;
+pub mod flow_replay;
 pub mod graph;
 pub mod history;
 pub mod interface_trend;
