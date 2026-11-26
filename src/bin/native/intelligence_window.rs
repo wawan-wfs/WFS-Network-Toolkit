@@ -2065,6 +2065,11 @@ impl Native {
                         for (name, points) in &trend.streams {
                             let summary = interface_trend::summarize(points);
                             if let Some(last) = points.back() {
+                                let series = ni::visual::Series::new(
+                                    format!("{key} / {name}"),
+                                    points,
+                                );
+                                let (rx_preview, tx_preview) = series.preview(24);
                                 row(
                                     [
                                         "Bandwidth interface".into(),
@@ -2077,16 +2082,13 @@ impl Native {
                                         format!("UTC {} · {} gap", last.utc, summary.gaps),
                                     ],
                                     format!(
-                                        "P95 RX {} bps · TX {} bps. {} interval valid. Gap tidak dihitung nol; tidak menjumlahkan interface yang mungkin membawa trafik sama.",
+                                        "P95 RX {} bps · TX {} bps. {} interval valid.\nRX {rx_preview}\nTX {tx_preview}\n24 sampel terakhir, skala bersama; ? gap, · nol. Tidak menjumlahkan interface yang mungkin membawa trafik sama.",
                                         display_opt(summary.p95_rx),
                                         display_opt(summary.p95_tx),
                                         summary.valid_intervals
                                     ),
                                     TREND_MODE,
-                                    Some(ni::visual::Series::new(
-                                        format!("{key} / {name}"),
-                                        points,
-                                    )),
+                                    Some(series),
                                 );
                             }
                         }

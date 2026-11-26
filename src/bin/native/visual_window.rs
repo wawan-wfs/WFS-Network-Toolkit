@@ -147,9 +147,10 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                     dc,
                     vis_rect(20, 56, width - 40, 25),
                     &format!(
-                        "{} node · {} relasi · zoom {}% · ruang {} × {} · {}",
+                        "{} node · {} relasi · {} komponen · zoom {}% · ruang {} × {} · {}",
                         graph.nodes.len(),
                         graph.links.len(),
+                        graph.components,
                         viewport.scale,
                         graph.width(),
                         graph.height,
@@ -178,6 +179,15 @@ fn visual_paint(h: HWND, dc: HDC, state: &VisualState) {
                             b.x + ni::graph::NODE_WIDTH / 2,
                             b.y + ni::graph::NODE_HEIGHT / 2,
                         );
+                        // Cull edges wholly outside the clip rectangle, retaining
+                        // links that may cross the visible region.
+                        if p.0.max(q.0) < 8
+                            || p.0.min(q.0) > width - 8
+                            || p.1.max(q.1) < 83
+                            || p.1.min(q.1) > height - 118
+                        {
+                            continue;
+                        }
                         vis_line(
                             dc,
                             p,

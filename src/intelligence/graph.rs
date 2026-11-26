@@ -1,6 +1,6 @@
 //! Read-only graph. Shared node identity is explicit and restricted to one router.
 use super::visual::{Edge, MAX_EDGES};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 pub const COLUMN_WIDTH: i32 = 236;
 pub const ROW_HEIGHT: i32 = 72;
@@ -40,6 +40,7 @@ pub struct Graph {
     pub links: Vec<Link>,
     pub limited: bool,
     pub height: i32,
+    pub components: usize,
 }
 
 fn column(kind: &str) -> usize {
@@ -84,24 +85,19 @@ impl Graph {
             ..Default::default()
         };
         let mut ids = BTreeMap::new();
-        let mut counts = [0i32; COLUMNS];
         for (index, edge) in edges.iter().take(MAX_EDGES).enumerate() {
             let mut pair = [0; 2];
             for (side, node_id) in pair.iter_mut().enumerate() {
                 let k = key(edge, side == 0, index);
                 let id = *ids.entry(k.clone()).or_insert_with(|| {
-                    let c = column(k.kind);
-                    let y = counts[c] * ROW_HEIGHT;
-                    counts[c] += 1;
-                    graph.height = graph.height.max(y + NODE_HEIGHT);
                     let id = graph.nodes.len();
                     graph.nodes.push(Node {
                         name: k.name,
                         kind: k.kind,
                         authority: k.router,
                         scope: edge.scope.clone(),
-                        x: c as i32 * COLUMN_WIDTH,
-                        y,
+                        x: 0,
+                        y: 0,
                         incident: Vec::new(),
                     });
                     id
@@ -115,7 +111,46 @@ impl Graph {
                 evidence: index,
             });
         }
+        graph.layout_components();
         graph
+    }
+
+    // Lay out disconnected evidence components in distinct vertical bands.
+    // IDs and evidence order remain stable for legacy selection and drilldown.
+    fn layout_components(&mut self) {
+        let mut visited = vec![false; self.nodes.len()];
+        let mut top = 0;
+        for root in 0..self.nodes.len() {
+            if visited[root] {
+                continue;
+            }
+            self.components += 1;
+            visited[root] = true;
+            let mut pending = VecDeque::from([root]);
+            let mut members = Vec::new();
+            while let Some(id) = pending.pop_front() {
+                members.push(id);
+                for &edge in &self.nodes[id].incident {
+                    let link = self.links[edge];
+                    let other = if link.from == id { link.to } else { link.from };
+                    if !visited[other] {
+                        visited[other] = true;
+                        pending.push_back(other);
+                    }
+                }
+            }
+            members.sort_unstable();
+            let mut counts = [0i32; COLUMNS];
+            for id in members {
+                let node = &mut self.nodes[id];
+                let col = column(node.kind);
+                node.x = col as i32 * COLUMN_WIDTH;
+                node.y = top + counts[col] * ROW_HEIGHT;
+                counts[col] += 1;
+                self.height = self.height.max(node.y + NODE_HEIGHT);
+            }
+            top += counts.into_iter().max().unwrap_or(0) * ROW_HEIGHT + 24;
+        }
     }
 
     pub fn width(&self) -> i32 {
@@ -200,6 +235,20 @@ mod tests {
         assert_ne!(graph.links[0].from, graph.links[2].from);
         assert_ne!(graph.links[0].to, graph.links[3].to);
         assert_eq!(graph.nodes[graph.links[0].from].incident, vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn separate_components_are_banded_and_selection_is_stable() {
+        let graph = Graph::build(&[
+            edge("r1", "br1", "ether1", "blue"),
+            edge("r2", "br1", "ether1", "blue"),
+            edge("r1", "br1", "ether2", "blue"),
+        ]);
+        assert_eq!(graph.components, 2);
+        assert_eq!(graph.links[2].evidence, 2);
+        assert_eq!(graph.links[0].from, graph.links[2].from);
+        assert!(graph.nodes[graph.links[1].from].y > graph.nodes[graph.links[2].to].y);
+        assert_eq!(Graph::build(&[]).components, 0);
     }
 
     #[test]

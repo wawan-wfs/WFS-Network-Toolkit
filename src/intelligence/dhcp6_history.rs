@@ -15,6 +15,8 @@ const MAX_BYTES: usize = 262144;
 const SCHEMA: &str = include_str!("sql/dhcp6_history_schema.sql");
 const INSERT: &str = include_str!("sql/dhcp6_history_insert.sql");
 const PAGE: &str = include_str!("sql/dhcp6_history_page.sql");
+const PAGE_BEFORE: &str = "SELECT stamp,payload FROM dhcp6_sample
+WHERE authority=?1 AND stamp<?2 ORDER BY stamp DESC LIMIT 20";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,6 +187,18 @@ pub fn save(path: &Path, sample: &Capture) -> Result<()> {
 }
 
 pub fn page(path: &Path, authority: &str) -> Result<Vec<Capture>> {
+    page_before(path, authority, None)
+}
+
+/// Stable descending keyset pagination; exclusive UTC cursor avoids duplicates.
+pub fn page_before(
+    path: &Path,
+    authority: &str,
+    before: Option<u64>,
+) -> Result<Vec<Capture>> {
+    if before.is_some_and(|stamp| stamp > i64::MAX as u64) {
+        return Err("Cursor histori DHCPv6 tidak valid.".into());
+    }
     if Authority::parse(authority)?.display() != authority {
         return Err("Authority histori tidak kanonik.".into());
     }
@@ -192,8 +206,15 @@ pub fn page(path: &Path, authority: &str) -> Result<Vec<Capture>> {
         return Ok(vec![]);
     }
     let conn = open(path, false)?;
-    let mut stmt = conn.prepare(PAGE).map_err(error)?;
-    let mut rows = stmt.query([authority]).map_err(error)?;
+    let mut stmt = conn
+        .prepare(if before.is_some() { PAGE_BEFORE } else { PAGE })
+        .map_err(error)?;
+    let mut rows = if let Some(stamp) = before {
+        stmt.query(params![authority, stamp as i64])
+    } else {
+        stmt.query([authority])
+    }
+    .map_err(error)?;
     let mut out = Vec::new();
     while let Some(r) = rows.next().map_err(error)? {
         let stamp: i64 = r.get(0).map_err(error)?;
@@ -209,6 +230,58 @@ pub fn page(path: &Path, authority: &str) -> Result<Vec<Capture>> {
         out.push(capture);
     }
     Ok(out)
+}
+
+/// Export aggregate coverage only, without router identity, addresses or DUID.
+pub fn export_summary(path: &Path, authority: &str, destination: &Path) -> Result<()> {
+    use std::io::Write;
+    if !path.try_exists().map_err(error)? {
+        return Err("Histori DHCPv6 belum tersedia.".into());
+    }
+    let mut cursor = None;
+    let mut counts = [0usize; 3];
+    let mut stored = 0usize;
+    let mut reported = 0usize;
+    // Schema contract caps one router at 120 snapshots.
+    for _ in 0..6 {
+        let samples = page_before(path, authority, cursor)?;
+        if samples.is_empty() {
+            break;
+        }
+        cursor = samples.last().map(|s| s.stamp);
+        for s in samples {
+            counts[match s.coverage {
+                CoverageState::CompleteSnapshot => 0,
+                CoverageState::Partial => 1,
+                CoverageState::Unavailable => 2,
+            }] += 1;
+            stored = stored.saturating_add(s.rows.len());
+            reported = reported.saturating_add(s.reported);
+        }
+    }
+    if !page_before(path, authority, cursor)?.is_empty() && cursor.is_some() {
+        return Err("Histori melebihi batas atau berubah saat ekspor.".into());
+    }
+    let summary = serde_json::json!({
+        "schema": 1,
+        "complete_snapshots": counts[0],
+        "partial_snapshots": counts[1],
+        "unavailable_snapshots": counts[2],
+        "stored_rows": stored,
+        "reported_rows": reported,
+        "basis": "historical snapshots; not unique assignments"
+    });
+    let stage = super::archive_ops::Stage::new(destination)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stage.file)
+        .map_err(error)?;
+    serde_json::to_writer_pretty(&mut file, &summary).map_err(error)?;
+    file.write_all(b"\n").map_err(error)?;
+    file.sync_all().map_err(error)?;
+    drop(file);
+    stage.publish(destination)
 }
 
 #[cfg(test)]
@@ -241,6 +314,15 @@ mod tests {
         save(&path, &Capture::from_snapshot(&empty).unwrap()).unwrap();
         let rows = page(&path, &authority.display()).unwrap();
         assert_eq!(rows.len(), 2);
+        let older = page_before(&path, &authority.display(), Some(rows[0].stamp)).unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!(older[0].stamp, rows[1].stamp);
+        let summary = dir.join("summary.json");
+        export_summary(&path, &authority.display(), &summary).unwrap();
+        let json = std::fs::read_to_string(&summary).unwrap();
+        assert!(!json.contains("router.test"));
+        assert!(!json.contains("2001:db8"));
+        assert!(export_summary(&path, &authority.display(), &summary).is_err());
         assert_eq!(rows[0].coverage, CoverageState::Unavailable);
         assert_eq!(rows[1].rows[0].binding.prefix.to_string(), "2001:db8::");
         assert!(

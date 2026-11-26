@@ -286,6 +286,60 @@ pub fn backup(path: &Path, dest: &Path) -> Result<()> {
     stage.publish(dest)
 }
 
+/// Exact operator scope only; overlapping prefixes are not proof of an
+/// address conflict, reservation enforcement or physical reachability.
+pub fn overlaps(path: &Path, candidate: &Note) -> Result<Vec<Note>> {
+    candidate.validate()?;
+    let parse = |value: &str| -> Option<(IpAddr, super::overview::Prefix)> {
+        let (ip, bits) = value.split_once('/')?;
+        let ip = ip.parse().ok()?;
+        Some((ip, super::overview::Prefix::new(ip, bits.parse().ok()?)?))
+    };
+    let (ip, prefix) = parse(&candidate.cidr).ok_or("CIDR tidak valid.")?;
+    Ok(page(path)?
+        .into_iter()
+        .filter(|row| {
+            row.active
+                && row.scope == candidate.scope
+                && parse(&row.cidr)
+                    .is_some_and(|(other, net)| prefix.contains(other) || net.contains(ip))
+        })
+        .collect())
+}
+
+/// Restore an independently validated backup to a new filename; never replace
+/// the active database, and reject altered source or SQLite sidecars.
+pub fn recover(source: &Path, destination: &Path) -> Result<()> {
+    super::archive_ops::recover_independent(source, destination, |path| {
+        let conn = open(path, false)?;
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(error)?;
+        if integrity != "ok" {
+            return Err("Integritas metadata IPAM gagal.".into());
+        }
+        let mut statement = conn
+            .prepare("SELECT scope,cidr,revision,recorded,active,reserved,alias,tags,note FROM ipam_revision ORDER BY scope,cidr,revision LIMIT 16385")
+            .map_err(error)?;
+        let mut count = 0;
+        let mut previous: Option<Note> = None;
+        for row in statement.query_map([], read_row).map_err(error)? {
+            let row = row.map_err(error)?;
+            row.validate()?;
+            count += 1;
+            let expected = previous
+                .as_ref()
+                .filter(|p| p.scope == row.scope && p.cidr == row.cidr)
+                .map_or(1, |p| p.revision + 1);
+            if count > 16384 || row.revision != expected || row.recorded < 0 {
+                return Err("Histori revisi IPAM tidak valid.".into());
+            }
+            previous = Some(row);
+        }
+        Ok(())
+    })
+}
+
 pub fn save(path: &Path, note: &Note, expected: i64, now: u64) -> Result<()> {
     let mut conn = open(path, true)?;
     let tx = conn
@@ -381,6 +435,14 @@ mod tests {
         let backup_path = dir.join("backup.sqlite3");
         backup(&path, &backup_path).unwrap();
         assert_eq!(page(&backup_path).unwrap(), page(&path).unwrap());
+        let probe = Note::parse("blue|192.0.2.128/25|label|||").unwrap();
+        let matches = overlaps(&path, &probe).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].scope, "blue");
+        let recovered = dir.join("recovered.sqlite3");
+        recover(&backup_path, &recovered).unwrap();
+        assert_eq!(page(&recovered).unwrap(), page(&path).unwrap());
+        assert!(recover(&backup_path, &recovered).is_err());
         assert!(backup(&path, &backup_path).is_err());
         let summary = dir.join("summary.json");
         export_summary(&path, &summary).unwrap();

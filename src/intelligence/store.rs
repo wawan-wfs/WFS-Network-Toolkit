@@ -1623,13 +1623,15 @@ mod tests {
         }
         samples.sort_unstable();
         println!(
-            "rows={written} scopes={} elapsed_ms={} rows_per_sec={:.0} db_bytes={} wal_bytes={} p95_inspect_us={}",
+            "rows={written} scopes={} elapsed_ms={} rows_per_sec={:.0} db_bytes={} wal_bytes={} p50_inspect_us={} p95_inspect_us={} p99_inspect_us={}",
             health.source_scopes,
             duration.as_millis(),
             written as f64 / duration.as_secs_f64(),
             health.main_bytes,
             health.wal_bytes,
-            samples[94]
+            samples[49],
+            samples[94],
+            samples[98]
         );
         drop((db, read));
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

@@ -212,6 +212,34 @@ fn hash_standalone(path: &Path) -> Result<[u8; 32]> {
     }
     Ok(digest.finalize().into())
 }
+/// Recovery for independent application databases; the caller validates the
+/// schema and every application row before and after staging the copy.
+pub(crate) fn recover_independent(
+    source: &Path,
+    destination: &Path,
+    validate: impl Fn(&Path) -> Result<()>,
+) -> Result<()> {
+    let fingerprint = hash_standalone(source)?;
+    validate(source)?;
+    let stage = Stage::new(destination)?;
+    fs::copy(source, &stage.file).map_err(|e| e.to_string())?;
+    if hash_standalone(&stage.file)? != fingerprint
+        || hash_standalone(source)? != fingerprint
+    {
+        return Err("Sumber backup berubah; pemulihan dibatalkan.".into());
+    }
+    validate(&stage.file)?;
+    if hash_standalone(&stage.file)? != fingerprint {
+        return Err("Salinan berubah saat validasi.".into());
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&stage.file)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
+    stage.publish(destination)
+}
+
 #[derive(Debug)]
 pub struct RecoveryPlan {
     fingerprint: [u8; 32],

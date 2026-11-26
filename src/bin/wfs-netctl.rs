@@ -92,6 +92,29 @@ fn run() -> wfs_network_toolkit::Result<()> {
                 eprintln!("{} arsip tidak dapat dibaca.", h.unreadable);
             }
         }
+        ["dhcp6-history", path, authority] => {
+            let rows = ni::dhcp6_history::page(Path::new(path), authority)?;
+            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
+        }
+        ["dhcp6-history", path, authority, before] => {
+            let stamp = before.parse::<u64>().map_err(|_| "Cursor UTC tidak valid.")?;
+            let rows = ni::dhcp6_history::page_before(Path::new(path), authority, Some(stamp))?;
+            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
+        }
+        ["dhcp6-export-summary", path, authority, destination] => {
+            ni::dhcp6_history::export_summary(Path::new(path), authority, Path::new(destination))?;
+            println!("Ringkasan agregat DHCPv6 disimpan.");
+        }
+        ["ipam-overlap", path, input] => {
+            let note = ni::ipam_notes::Note::parse(input)?;
+            for row in ni::ipam_notes::overlaps(Path::new(path), &note)? {
+                println!("{} | {} | revisi {}", row.scope, row.cidr, row.revision);
+            }
+        }
+        ["ipam-recover", source, destination, "--confirm"] => {
+            ni::ipam_notes::recover(Path::new(source), Path::new(destination))?;
+            println!("Salinan IPAM dipulihkan ke berkas baru; sumber tidak diubah.");
+        }
         ["archive-info"] => {
             let path = store::default_path()?;
             if !path.exists() {
@@ -192,7 +215,7 @@ fn run() -> wfs_network_toolkit::Result<()> {
             println!("{}", w::recover(id)?);
         }
         _ => println!(
-            "WeNet Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
+            "WeNet Toolkit CLI\n  list\n  inspect <GUID>\n  backup <GUID> <file.json> [--include-mac]\n  check-backup <file.json>\n  snapshot-local <file.json>\n  probe-https --confirm\n  history-list\n  dhcp6-history <file.sqlite3> <authority> [before-utc]\n  dhcp6-export-summary <file.sqlite3> <authority> <new.json>\n  ipam-overlap <file.sqlite3> <scope|CIDR|label/reserved|alias|tag|note>\n  ipam-recover <backup.sqlite3> <new.sqlite3> --confirm\n  archive-info\n  archive-health\n  archive-backup <salinan.sqlite3> --confirm\n  archive-verify <salinan.sqlite3>\n  archive-list-snapshots\n  archive-import-history --confirm\n  history-clear --confirm\n  set-mac <GUID> <MAC> --confirm\n  reset-mac <GUID> --confirm\n  recover <GUID> --confirm\nPerintah mutasi memerlukan konsol Administrator lokal dan adaptor uji yang diizinkan."
         ),
     }
     Ok(())

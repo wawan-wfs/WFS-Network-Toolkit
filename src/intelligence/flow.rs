@@ -132,6 +132,7 @@ pub struct Decoder {
     templates: HashMap<Key, Template>,
     recent: VecDeque<(Session, [u8; 32])>,
     v9_clock: HashMap<Session, (u32, u32)>,
+    sequence_clock: HashMap<Session, (u32, u32)>,
 }
 #[derive(Default)]
 pub struct Batch {
@@ -139,6 +140,9 @@ pub struct Batch {
     pub missing: u32,
     pub skipped: u32,
     pub duplicate: bool,
+    pub sequence_reordered: bool,
+    pub sequence_repeated: bool,
+    pub generation_restart: bool,
 }
 fn take<'a>(p: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
     if n > p.len() {
@@ -176,7 +180,7 @@ impl Decoder {
             _ => return Err("Versi bukan IPFIX atau NetFlow v9.".into()),
         };
         let exported = u32b(&mut packet)?;
-        let _sequence = u32b(&mut packet)?;
+        let sequence = u32b(&mut packet)?;
         let domain = u32b(&mut packet)?;
         let session = (exporter, version, domain);
         let key = (session, digest);
@@ -378,6 +382,22 @@ impl Decoder {
                 batch.skipped += 1;
             } // options/sampling are not interpreted
         }
+        // Commit diagnostic state only after successful decoding. Same sequence
+        // can be valid (IPFIX template-only messages); never count it as loss.
+        batch.generation_restart = restart;
+        if self.sequence_clock.len() >= 512 && !self.sequence_clock.contains_key(&session) {
+            self.sequence_clock.clear();
+        }
+        if let Some(&(old_export, old_sequence)) = self.sequence_clock.get(&session) {
+            if !restart {
+                let delta = sequence.wrapping_sub(old_sequence);
+                batch.sequence_repeated = delta == 0;
+                batch.sequence_reordered = exported < old_export || delta >= (1 << 31);
+            }
+        }
+        if restart || !batch.sequence_reordered {
+            self.sequence_clock.insert(session, (exported, sequence));
+        }
         self.templates.retain(|k, t| {
             stamp.saturating_sub(t.updated) <= TEMPLATE_TTL && (!restart || k.0 != session)
         });
@@ -517,6 +537,9 @@ pub struct Stats {
     pub duplicate: u64,
     pub skipped: u64,
     pub missing_templates: u64,
+    pub sequence_reordered: u64,
+    pub sequence_repeated: u64,
+    pub generation_restarts: u64,
     pub retained: usize,
     pub evicted: u64,
     pub last_received: Option<u64>,
@@ -760,6 +783,9 @@ impl Collector {
                                         stats.last_received = Some(now);
                                         stats.missing_templates += u64::from(b.missing);
                                         stats.skipped += u64::from(b.skipped);
+                                        stats.sequence_reordered += u64::from(b.sequence_reordered);
+                                        stats.sequence_repeated += u64::from(b.sequence_repeated);
+                                        stats.generation_restarts += u64::from(b.generation_restart);
                                     }
                                     Err(_) => stats.invalid += 1,
                                 }
@@ -771,6 +797,9 @@ impl Collector {
                                     data.stats.last_received = Some(now);
                                     data.stats.missing_templates += u64::from(b.missing);
                                     data.stats.skipped += u64::from(b.skipped);
+                                    data.stats.sequence_reordered += u64::from(b.sequence_reordered);
+                                    data.stats.sequence_repeated += u64::from(b.sequence_repeated);
+                                    data.stats.generation_restarts += u64::from(b.generation_restart);
                                     for f in b.flows {
                                         if data.flows.len() == MAX_ROWS {
                                             data.flows.pop_front();

@@ -72,6 +72,25 @@ impl Series {
         &self.points[end.saturating_sub(span)..end]
     }
 
+    /// Native text preview with a common RX/TX scale. Missing data is '?',
+    /// measured zero is '·'; no interpolation or aggregation is performed.
+    pub fn preview(&self, span: usize) -> (String, String) {
+        let points = self.range(self.points.len(), span.clamp(1, MAX_POINTS));
+        let maximum = Self::max_value(points);
+        let glyph = |value: Option<u64>| match value {
+            None => '?',
+            Some(0) => '·',
+            Some(value) => {
+                let level = Self::axis(value, maximum, 7).clamp(0, 7) as usize;
+                ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'][level]
+            }
+        };
+        (
+            points.iter().map(|point| glyph(point.rx_bps)).collect(),
+            points.iter().map(|point| glyph(point.tx_bps)).collect(),
+        )
+    }
+
     pub fn max_value(points: &[Point]) -> u64 {
         points
             .iter()
@@ -111,6 +130,7 @@ mod tests {
         let tail = series.range(120, 2);
         assert_eq!(tail[0].rx_bps, None);
         assert_eq!(tail[1].rx_bps, Some(0));
+        assert_eq!(series.preview(2), ("?·".into(), "██".into()));
         assert_eq!(Series::max_value(tail), u64::MAX);
         assert_eq!(Series::axis(u64::MAX, u64::MAX, 200), 200);
         assert!(series.range(0, 30).is_empty());
