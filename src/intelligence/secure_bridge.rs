@@ -233,6 +233,7 @@ pub fn collect_tls(expected: &TlsConfig, path: &Path, cancel: &SessionCancel) ->
             }
         });
         let deadline = Instant::now() + Duration::from_secs(1810);
+        let mut sequence=std::collections::BTreeMap::<u32,u32>::new();
         loop {
             if cancel.stopped() || Instant::now() >= deadline {
                 let _ = child.kill();
@@ -245,9 +246,15 @@ pub fn collect_tls(expected: &TlsConfig, path: &Path, cancel: &SessionCancel) ->
                     let authorized = matches!(&report, Report::Tls { bind, peer_certificate_sha256, .. }
                         if *bind == expected.bind && expected.allowed_client_sha256.contains(peer_certificate_sha256));
                     let rejected = matches!(&report, Report::TlsRejected { bind, .. } if *bind == expected.bind);
-                    if result.saved + result.rejected >= 1024 || report.stamp().abs_diff(super::now()) > 120
+                    if result.saved + result.rejected >= 16_384 || report.stamp().abs_diff(super::now()) > 120
                         || !(authorized || rejected) {
                         return Err("Identitas/batas laporan collector tidak cocok.".into());
+                    }
+                    if let Report::Tls { stream, .. }=&report {
+                        let stream=stream.as_ref().ok_or("Batch collector tidak memiliki identitas stream.")?;
+                        let expected=sequence.get(&stream.connection).copied().unwrap_or(0)+1;
+                        if stream.batch!=expected { return Err("Urutan batch collector tidak valid.".into()); }
+                        sequence.insert(stream.connection,stream.batch);
                     }
                     super::secure_monitor::append(path, &report)?;
                     if authorized { result.saved += 1; } else { result.rejected += 1; }

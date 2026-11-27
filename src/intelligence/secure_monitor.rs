@@ -20,6 +20,12 @@ pub struct Group {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamBatch {
+    pub connection:u32,
+    pub batch:u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "transport", deny_unknown_fields)]
 pub enum Report {
     #[serde(rename = "SNMPv3")]
@@ -41,6 +47,8 @@ pub enum Report {
         accepted: u32,
         rejected: u32,
         groups: Vec<Group>,
+        #[serde(default,skip_serializing_if="Option::is_none")]
+        stream: Option<StreamBatch>,
     },
     /// Rejected connection; never represents an authenticated observation.
     #[serde(rename = "tls_rejected")]
@@ -67,12 +75,15 @@ impl Report {
             Self::TlsRejected { schema, bind, observed_utc, reason } =>
                 *schema == 1 && valid_address(*bind) && *observed_utc <= i64::MAX as u64
                 && matches!(reason.as_str(), "handshake_or_authorization_or_framing"),
-            Self::Tls { schema, bind, peer_certificate_sha256, observed_utc, accepted, rejected, groups } => {
+            Self::Tls { schema, bind, peer_certificate_sha256, observed_utc, accepted, rejected, groups, stream } => {
                 let mut seen = BTreeSet::new();
                 let mut sum = 0u64;
                 *schema == 1 && valid_address(*bind) && pin_valid(peer_certificate_sha256)
                     && *observed_utc <= i64::MAX as u64
                     && u64::from(*accepted) + u64::from(*rejected) <= 10_000
+                    && stream.as_ref().is_none_or(|s| (1..=1024).contains(&s.connection)
+                        && (1..=65_536).contains(&s.batch)
+                        && (1..=64).contains(&(u64::from(*accepted)+u64::from(*rejected))))
                     && groups.len() <= 384 && groups.iter().all(|g| {
                         sum += u64::from(g.count);
                         matches!(g.format.as_str(), "Rfc5424Header" | "LegacyPriority")
@@ -100,7 +111,10 @@ impl Report {
     pub fn summary(&self) -> String {
         match self {
             Self::Snmp { sys_uptime_ticks, .. } => format!("sysUpTime: {sys_uptime_ticks} ticks"),
-            Self::Tls { accepted, rejected, .. } => format!("{accepted} diterima · {rejected} ditolak"),
+            Self::Tls { accepted, rejected, stream, .. } => {
+                let suffix=stream.as_ref().map_or_else(String::new,|s|format!(" · koneksi {} batch {} (lokal sesi)",s.connection,s.batch));
+                format!("{accepted} diterima · {rejected} ditolak{suffix}")
+            },
             Self::TlsRejected { .. } => "Koneksi ditolak; identitas peer tidak terbukti.".into(),
         }
     }
@@ -271,7 +285,7 @@ mod tests {
     }
     #[test]
     fn tls_rejects_bad_totals_duplicate_groups_and_unknown_fields() {
-        let mut r = Report::Tls {schema:1,bind:"127.0.0.1:6514".parse().unwrap(),peer_certificate_sha256:"a".repeat(64),observed_utc:100,accepted:2,rejected:0,groups:vec![Group{format:"LegacyPriority".into(),facility:1,severity:5,count:2}]};
+        let mut r = Report::Tls {schema:1,bind:"127.0.0.1:6514".parse().unwrap(),peer_certificate_sha256:"a".repeat(64),observed_utc:100,accepted:2,rejected:0,groups:vec![Group{format:"LegacyPriority".into(),facility:1,severity:5,count:2}],stream:None};
         assert!(r.validate().is_ok());
         if let Report::Tls { groups, .. } = &mut r { groups.push(groups[0].clone()); }
         assert!(r.validate().is_err());

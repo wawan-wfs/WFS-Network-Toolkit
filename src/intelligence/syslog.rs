@@ -135,6 +135,86 @@ pub fn read_framed(reader: impl Read) -> Result<Summary> {
     }
     Ok(out)
 }
+/// Incremental framing for an already authenticated, bounded transport.
+/// Unlike the offline all-or-nothing parser, completed frames are independent
+/// observations. A malformed suffix cannot retract an emitted batch.
+#[derive(Default)]
+pub struct FramedStream {
+    prefix: usize,
+    digits: usize,
+    remaining: Option<usize>,
+    frame: Vec<u8>,
+    total_bytes: usize,
+    total_frames: usize,
+    pending: Summary,
+    failed: bool,
+}
+impl FramedStream {
+    pub const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
+    pub const MAX_STREAM_FRAMES: usize = 65_536;
+    pub const BATCH_FRAMES: usize = 64;
+
+    pub fn pending_frames(&self) -> usize { self.pending.accepted + self.pending.rejected }
+    pub fn in_frame(&self) -> bool { self.digits != 0 || self.remaining.is_some() }
+    pub fn take_summary(&mut self) -> Option<Summary> {
+        (self.pending_frames() != 0).then(|| std::mem::take(&mut self.pending))
+    }
+    pub fn complete(&self) -> Result<()> {
+        if self.failed || self.in_frame() { Err("Stream Syslog tidak lengkap.".into()) } else { Ok(()) }
+    }
+    pub fn feed(&mut self, bytes: &[u8], mut emit: impl FnMut(Summary) -> Result<()>) -> Result<()> {
+        if self.failed { return Err("Framing stream sudah gagal.".into()); }
+        let result = self.feed_inner(bytes,&mut emit);
+        if result.is_err() {
+            self.failed=true;
+            self.frame.fill(0);
+            self.frame.clear();
+        }
+        result
+    }
+    fn feed_inner(&mut self, bytes: &[u8], emit: &mut impl FnMut(Summary) -> Result<()>) -> Result<()> {
+        for &byte in bytes {
+            if self.total_bytes == Self::MAX_STREAM_BYTES { return Err("Batas byte stream tercapai.".into()); }
+            self.total_bytes+=1;
+            if let Some(remaining)=self.remaining {
+                self.frame.push(byte);
+                if remaining > 1 {
+                    self.remaining=Some(remaining-1);
+                    continue;
+                }
+                let group=std::str::from_utf8(&self.frame).ok()
+                    .filter(|s| !s.chars().any(|c| c.is_control() && c!='\t')).and_then(priority);
+                if let Some(group)=group {
+                    *self.pending.groups.entry(group).or_default()+=1;
+                    self.pending.accepted+=1;
+                } else { self.pending.rejected+=1; }
+                self.frame.fill(0);
+                self.frame.clear();
+                self.remaining=None;
+                self.total_frames+=1;
+                if self.pending_frames() == Self::BATCH_FRAMES {
+                    if let Some(summary)=self.take_summary() { emit(summary)?; }
+                }
+            } else if byte == b' ' {
+                if self.digits == 0 || self.prefix == 0 || self.prefix > MAX_LINE
+                    || self.total_frames >= Self::MAX_STREAM_FRAMES {
+                    return Err("Panjang atau jumlah frame stream tidak valid.".into());
+                }
+                self.remaining=Some(self.prefix);
+                self.prefix=0;
+                self.digits=0;
+            } else {
+                if !byte.is_ascii_digit() || (self.digits==0 && byte==b'0') || self.digits==4 {
+                    return Err("Prefix stream Syslog tidak kanonik.".into());
+                }
+                self.digits+=1;
+                self.prefix=self.prefix*10+usize::from(byte-b'0');
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn read_octet_counted(path: &Path) -> Result<Summary> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     read_framed(file)
@@ -200,6 +280,33 @@ mod tests {
         assert!(read_framed(Fragmented(&bytes.as_bytes()[..bytes.len() - 1])).is_err());
     }
 
+    #[test]
+    fn stream_emits_complete_batches_before_eof_and_preserves_valid_prefix() {
+        let mut parser=FramedStream::default();
+        let frame=b"5 <13>x";
+        let mut batches=Vec::new();
+        for _ in 0..65 {
+            for byte in frame { parser.feed(&[*byte],|summary| { batches.push(summary); Ok(()) }).unwrap(); }
+        }
+        assert_eq!(batches.len(),1);
+        assert_eq!(batches[0].accepted,64);
+        assert_eq!(parser.pending_frames(),1);
+        parser.feed(b"6 <14>",|_|Ok(())).unwrap();
+        assert!(parser.in_frame());
+        assert!(parser.complete().is_err());
+        assert_eq!(parser.take_summary().unwrap().accepted,1);
+        assert!(parser.take_summary().is_none());
+    }
+    #[test]
+    fn stream_rejects_bad_prefix_and_never_reuses_poisoned_state() {
+        for bad in [b"0 ".as_slice(),b"99999 x",b"8193 ",b"1x"] {
+            let mut p=FramedStream::default();
+            p.feed(b"5 <13>x",|_|Ok(())).unwrap();
+            assert!(p.feed(bad,|_|Ok(())).is_err());
+            assert_eq!(p.take_summary().unwrap().accepted,1);
+            assert!(p.feed(b"5 <13>x",|_|Ok(())).is_err());
+        }
+    }
     #[test]
     fn bounds_lines_and_payload() {
         let lines = "<13>message\n".repeat(MAX_LINES + 1);

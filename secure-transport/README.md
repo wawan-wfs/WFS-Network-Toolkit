@@ -36,3 +36,6 @@ Collector now admits at most four concurrent connections, 1024 total, and 30 min
 
 ### Certificate revocation
 Optional absolute `client_crl` PEM path is loaded once per explicit session. Rustls checks chain revocation and CRL nextUpdate; missing/unknown status is denied when CRLs are configured. Without a CRL, CA and exact leaf pin remain mandatory but CRL revocation is not checked. Rotation requires stop, protected file update and new authorization. Not an automated certificate lifecycle. Real positive, revoked, expired and missing-CRL cases remain acceptance requirements.
+
+### Streaming collector
+The multi-connection collector emits complete authenticated frame batches (64 frames or approximately two seconds) before EOF. Per connection: 16 MiB/65,536 frames, 60-second idle deadline, 15-second partial-frame deadline, global session deadline 30 minutes. Four concurrent connections, 1024 admissions and 16,384 summary/rejection events per run. Complete frames already persisted remain valid after a malformed tail; a rejection event is distinct from a successful batch. Connection and batch ordinal are local to this collector run, not global or replay-proof IDs. One-shot mode retains its existing all-or-nothing contract. No raw payload is persisted. Rust runtime/interoperability tests remain mandatory.

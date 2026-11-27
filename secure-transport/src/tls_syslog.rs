@@ -102,6 +102,7 @@ fn server(config: &Config) -> Result<Arc<ServerConfig>> {
 struct DeadlineSocket {
     socket: TcpStream,
     deadline: Instant,
+    read_slice: Option<Duration>,
 }
 impl DeadlineSocket {
     fn remaining(&self) -> io::Result<Duration> {
@@ -115,7 +116,8 @@ impl DeadlineSocket {
 }
 impl Read for DeadlineSocket {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.socket.set_read_timeout(Some(self.remaining()?))?;
+        let remaining=self.remaining()?;
+        self.socket.set_read_timeout(Some(self.read_slice.map_or(remaining,|slice|slice.min(remaining))))?;
         self.socket.read(buf)
     }
 }
@@ -187,51 +189,60 @@ fn receive_config(config: Config) -> Result<Value> {
         .ok_or("Tidak ada koneksi TLS sebelum deadline.")?;
     receive_peer(socket, &config, settings, &allowed, Instant::now() + Duration::from_secs(24))
 }
-/// Up to four concurrent admissions, no unbounded queue or thread creation.
-/// Each session has its own handshake and message deadline; the listener
-/// runs for at most 30 minutes or 1024 accepted sockets. Rejections are
-/// separate coarse events without claimed peer identity or raw error text.
+/// Bounded streaming collector. Every IPC batch contains only complete frames
+/// from a verified connection. A terminal marker releases an admission slot.
 pub fn collect_pipe() -> Result<()> {
-    let config = config_from_pipe()?;
-    let allowed = pins(&config.allowed_client_sha256)?;
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    let config = Arc::new(config_from_pipe()?);
+    let allowed = Arc::new(pins(&config.allowed_client_sha256)?);
     let settings = server(&config)?;
     let listener = listener(config.bind)?;
     let deadline = Instant::now() + Duration::from_secs(1800);
     let mut output = io::stdout().lock();
     let mut admissions = 0usize;
     let mut active = 0usize;
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Value>(4);
+    let events=Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Option<Value>>(4);
     let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
-    let config = Arc::new(config);
-    let allowed = Arc::new(allowed);
-    // Join completed workers as we go; only four handles can remain live.
+    eprintln!("WeNet collector streaming: {}",config.bind);
     loop {
-        while let Ok(report) = rx.try_recv() {
-            active -= 1;
-            serde_json::to_writer(&mut output,&report).map_err(|_| "Output collector gagal.")?;
-            output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "Output collector gagal.")?;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Some(report) => {
+                    serde_json::to_writer(&mut output,&report).map_err(|_| "Output collector gagal.")?;
+                    output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "Output collector gagal.")?;
+                }
+                None => { active-=1; }
+            }
         }
         let mut i=0;
         while i<workers.len() {
             if workers[i].is_finished() {
-                let worker: std::thread::JoinHandle<()> = workers.swap_remove(i);
-                worker.join().map_err(|_| "Worker TLS gagal.")?;
+                workers.swap_remove(i).join().map_err(|_| "Worker TLS gagal.")?;
             } else { i+=1; }
         }
-        if (Instant::now() >= deadline || admissions >= 1024) && active == 0 { break; }
-        if Instant::now() < deadline && admissions < 1024 && active < 4 && workers.len() < 4 {
+        let exhausted=events.load(Ordering::Acquire)>=16_384;
+        if (Instant::now() >= deadline || admissions >= 1024 || exhausted) && active == 0 { break; }
+        if Instant::now() < deadline && admissions < 1024 && active < 4 && workers.len() < 4 && !exhausted {
             if let Some(socket)=accept_before(&listener,deadline.min(Instant::now()+Duration::from_millis(50)))? {
                 let settings=settings.clone();
                 let config=config.clone();
                 let allowed=allowed.clone();
                 let tx=tx.clone();
+                let events=events.clone();
+                let connection_id=(admissions+1) as u32;
                 let worker=thread::Builder::new().name("wenet-tls-peer".into()).spawn(move || {
-                    let report=receive_peer(socket,&config,settings,&allowed,deadline).unwrap_or_else(|_| {
-                        json!({"schema":1,"transport":"tls_rejected","bind":config.bind.to_string(),
+                    let emit=|report:Value| -> Result<()> {
+                        events.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<16_384).then_some(n+1))
+                            .map_err(|_| "Batas event collector tercapai.")?;
+                        tx.send(Some(report)).map_err(|_| "IPC collector ditutup.".into())
+                    };
+                    if stream_peer(socket,&config,settings,&allowed,deadline,connection_id,&emit).is_err() {
+                        let _=emit(json!({"schema":1,"transport":"tls_rejected","bind":config.bind.to_string(),
                             "observed_utc":wfs_network_toolkit::intelligence::now(),
-                            "reason":"handshake_or_authorization_or_framing"})
-                    });
-                    let _=tx.send(report);
+                            "reason":"handshake_or_authorization_or_framing"}));
+                    }
+                    let _=tx.send(None);
                 }).map_err(|_| "Worker TLS tidak dapat dimulai.")?;
                 workers.push(worker);
                 admissions+=1;
@@ -241,11 +252,77 @@ pub fn collect_pipe() -> Result<()> {
     }
     drop(rx);
     for worker in workers { worker.join().map_err(|_| "Worker TLS gagal.")?; }
+    if events.load(Ordering::Acquire)>=16_384 { return Err("Batas event collector tercapai.".into()); }
     Ok(())
+}
+
+fn stream_peer(socket:TcpStream,config:&Config,settings:Arc<ServerConfig>,
+    allowed:&BTreeSet<String>, deadline:Instant, connection_id:u32,
+    emit:&impl Fn(Value)->Result<()>) -> Result<()> {
+    use wfs_network_toolkit::intelligence::syslog::{FramedStream,Summary};
+    let mut io=DeadlineSocket{socket,deadline:deadline.min(Instant::now()+Duration::from_secs(8)),read_slice:None};
+    let mut connection=ServerConnection::new(settings).map_err(|_|"TLS gagal.")?;
+    while connection.is_handshaking() {
+        connection.complete_io(&mut io).map_err(|_|"Handshake TLS ditolak atau timeout.")?;
+    }
+    let leaf=connection.peer_certificates().and_then(|chain|chain.first()).ok_or("Sertifikat klien wajib.")?;
+    let pin=fingerprint(leaf.as_ref());
+    if !allowed.contains(&pin) { return Err("Sertifikat klien tidak diotorisasi.".into()); }
+    io.deadline=deadline;
+    io.read_slice=Some(Duration::from_secs(1));
+    let mut tls=StreamOwned::new(connection,io);
+    let mut parser=FramedStream::default();
+    let mut bytes=[0u8;4096];
+    let mut batch_id=0u32;
+    let mut publish=|summary:Summary| -> Result<()> {
+        batch_id+=1;
+        let groups:Vec<_>=summary.groups.into_iter().map(|((format,facility,severity),count)|
+            json!({"format":format!("{format:?}"),"facility":facility,"severity":severity,"count":count})).collect();
+        emit(json!({"schema":1,"transport":"mutual_tls","bind":config.bind.to_string(),
+            "peer_certificate_sha256":pin,"observed_utc":wfs_network_toolkit::intelligence::now(),
+            "accepted":summary.accepted,"rejected":summary.rejected,"groups":groups,
+            "stream":{"connection":connection_id,"batch":batch_id}}))
+    };
+    let mut last_read=Instant::now();
+    let mut last_flush=last_read;
+    let mut partial_since=None;
+    let result=(|| -> Result<()> {
+        loop {
+            let now=Instant::now();
+            if now>=deadline { return parser.complete(); }
+            if now.duration_since(last_read)>=Duration::from_secs(60)
+                || partial_since.is_some_and(|t:Instant|now.duration_since(t)>=Duration::from_secs(15)) {
+                return Err("Deadline idle/frame tercapai.".into());
+            }
+            match tls.read(&mut bytes) {
+                Ok(0) => { parser.complete()?; break; }
+                Ok(n) => {
+                    last_read=Instant::now();
+                    let before=parser.in_frame();
+                    parser.feed(&bytes[..n],&mut publish)?;
+                    if parser.in_frame() {
+                        if !before || partial_since.is_none() { partial_since=Some(last_read); }
+                    } else { partial_since=None; }
+                }
+                Err(e) if matches!(e.kind(),io::ErrorKind::TimedOut|io::ErrorKind::WouldBlock|io::ErrorKind::Interrupted) => {}
+                Err(_) => return Err("Baca TLS stream gagal.".into()),
+            }
+            if last_flush.elapsed()>=Duration::from_secs(2) {
+                if let Some(summary)=parser.take_summary() { publish(summary)?; }
+                last_flush=Instant::now();
+            }
+        }
+        tls.conn.send_close_notify();
+        tls.flush().map_err(|_|"Penutupan TLS gagal.".into())
+    })();
+    // Completed frames are independently valid even when the trailing frame
+    // is truncated or the connection fails. Never publish partial raw bytes.
+    if let Some(summary)=parser.take_summary() { publish(summary)?; }
+    result
 }
 fn receive_peer(socket: TcpStream, config: &Config, settings: Arc<ServerConfig>,
     allowed: &BTreeSet<String>, deadline: Instant) -> Result<Value> {
-    let mut io = DeadlineSocket { socket, deadline: deadline.min(Instant::now() + Duration::from_secs(8)) };
+    let mut io = DeadlineSocket { socket, deadline: deadline.min(Instant::now() + Duration::from_secs(8)), read_slice: None };
     let mut connection = ServerConnection::new(settings).map_err(|_| "TLS gagal.")?;
     while connection.is_handshaking() {
         connection.complete_io(&mut io).map_err(|_| "Handshake TLS ditolak atau timeout.")?;
