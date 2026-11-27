@@ -28,6 +28,7 @@ pub mod router_history;
 pub mod store;
 pub mod syslog;
 pub mod secure_monitor;
+pub mod secure_attempt;
 #[cfg(windows)]
 pub mod secure_bridge;
 pub mod visual;

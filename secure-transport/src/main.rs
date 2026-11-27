@@ -8,6 +8,9 @@ use std::{env, process::ExitCode};
 type Result<T> = std::result::Result<T, String>;
 
 fn run(args: &[String]) -> Result<()> {
+    if matches!(args, [cmd, confirm] if cmd == "syslog-tls-collect" && confirm == "--confirm") {
+        return tls_syslog::collect_pipe();
+    }
     let report = match args {
         [cmd, target, confirm] if cmd == "snmpv3-get" && confirm == "--confirm" => {
             snmp::get_once(target)?

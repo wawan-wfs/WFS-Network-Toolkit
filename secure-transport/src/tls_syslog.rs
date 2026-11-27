@@ -117,7 +117,7 @@ impl Write for DeadlineSocket {
         self.socket.flush()
     }
 }
-fn accept_once(bind: SocketAddr) -> Result<TcpStream> {
+fn listener(bind: SocketAddr) -> Result<TcpListener> {
     if bind.port() == 0 || bind.ip().is_unspecified() || bind.ip().is_multicast()
         || matches!(bind.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
     {
@@ -125,16 +125,17 @@ fn accept_once(bind: SocketAddr) -> Result<TcpStream> {
     }
     let listener = TcpListener::bind(bind).map_err(|_| "Bind TLS gagal.")?;
     listener.set_nonblocking(true).map_err(|_| "Mode listener gagal.")?;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    eprintln!("WeNet secure transport: menunggu satu koneksi pada {bind}");
+    Ok(listener)
+}
+fn accept_before(listener: &TcpListener, deadline: Instant) -> Result<Option<TcpStream>> {
     loop {
         if Instant::now() >= deadline {
-            return Err("Tidak ada koneksi TLS sebelum deadline.".into());
+            return Ok(None);
         }
         match listener.accept() {
             Ok((socket, _)) => {
                 socket.set_nonblocking(false).map_err(|_| "Mode socket gagal.")?;
-                return Ok(socket);
+                return Ok(Some(socket));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
@@ -152,7 +153,7 @@ pub fn receive_once(path: &Path) -> Result<Value> {
         .map_err(|_| "Konfigurasi TLS tidak valid.")?;
     receive_config(config)
 }
-pub fn receive_pipe() -> Result<Value> {
+fn config_from_pipe() -> Result<Config> {
     use std::io::IsTerminal;
     let stdin = io::stdin();
     if stdin.is_terminal() { return Err("Konfigurasi TLS harus melalui pipe.".into()); }
@@ -160,13 +161,55 @@ pub fn receive_pipe() -> Result<Value> {
     stdin.lock().take(16_385).read_to_end(&mut data).map_err(|_| "Input TLS gagal.")?;
     if data.len() > 16_384 { return Err("Input TLS terlalu besar.".into()); }
     let config: Config = serde_json::from_slice(&data).map_err(|_| "Konfigurasi TLS tidak valid.")?;
-    receive_config(config)
+    Ok(config)
+}
+pub fn receive_pipe() -> Result<Value> {
+    receive_config(config_from_pipe()?)
 }
 fn receive_config(config: Config) -> Result<Value> {
     let allowed = pins(&config.allowed_client_sha256)?;
     let settings = server(&config)?;
-    let socket = accept_once(config.bind)?;
-    let mut io = DeadlineSocket { socket, deadline: Instant::now() + Duration::from_secs(8) };
+    let listener = listener(config.bind)?;
+    eprintln!("WeNet secure transport: menunggu satu koneksi pada {}", config.bind);
+    let socket = accept_before(&listener, Instant::now() + Duration::from_secs(20))?
+        .ok_or("Tidak ada koneksi TLS sebelum deadline.")?;
+    receive_peer(socket, &config, settings, &allowed, Instant::now() + Duration::from_secs(24))
+}
+/// Bounded multi-connection listener. Reuses the validated server config,
+/// but every new connection independently proves its client identity.
+/// Only completed authenticated sessions are emitted; rejected peers do not
+/// terminate the listener. No raw Syslog or untrusted diagnostic text in IPC.
+pub fn collect_pipe() -> Result<()> {
+    let config = config_from_pipe()?;
+    let allowed = pins(&config.allowed_client_sha256)?;
+    let settings = server(&config)?;
+    let listener = listener(config.bind)?;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut output = io::stdout().lock();
+    let mut accepted = 0u32;
+    let mut rejected = 0u32;
+    for _ in 0..128 {
+        let Some(socket) = accept_before(&listener, deadline)? else { break };
+        match receive_peer(socket, &config, settings.clone(), &allowed, deadline) {
+            Ok(report) => {
+                serde_json::to_writer(&mut output, &report).map_err(|_| "Output collector gagal.")?;
+                output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "Output collector gagal.")?;
+                accepted += 1;
+            }
+            Err(_) => {
+                rejected += 1;
+                // Sequential admission with a small rejection delay; bound
+                // the number of attempts even under repeated hostile connects.
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    eprintln!("WeNet collector: {accepted} sesi diterima, {rejected} sesi ditolak.");
+    Ok(())
+}
+fn receive_peer(socket: TcpStream, config: &Config, settings: Arc<ServerConfig>,
+    allowed: &BTreeSet<String>, deadline: Instant) -> Result<Value> {
+    let mut io = DeadlineSocket { socket, deadline: deadline.min(Instant::now() + Duration::from_secs(8)) };
     let mut connection = ServerConnection::new(settings).map_err(|_| "TLS gagal.")?;
     while connection.is_handshaking() {
         connection.complete_io(&mut io).map_err(|_| "Handshake TLS ditolak atau timeout.")?;
@@ -177,7 +220,7 @@ fn receive_config(config: Config) -> Result<Value> {
     if !allowed.contains(&pin) {
         return Err("Sertifikat klien tidak diotorisasi.".into());
     }
-    io.deadline = Instant::now() + Duration::from_secs(15);
+    io.deadline = deadline.min(Instant::now() + Duration::from_secs(15));
     let mut tls = StreamOwned::new(connection, io);
     let summary = wfs_network_toolkit::intelligence::syslog::read_framed(&mut tls)
         .map_err(|_| "Framing Syslog TLS ditolak atau sesi tidak ditutup dengan benar.")?;

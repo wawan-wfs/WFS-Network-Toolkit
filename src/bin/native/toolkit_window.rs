@@ -131,6 +131,7 @@ struct Native {
 }
 impl Drop for Native {
     fn drop(&mut self) {
+        if let Some(cancel) = &self.intel.secure_cancel { cancel.stop(); }
         for f in self.fonts {
             if !f.is_null() {
                 unsafe {
@@ -1008,7 +1009,8 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
-                INTEL_RECORD if selection(self.h(INTEL_MODE)) == SECURE_MODE => false,
+                INTEL_RECORD if selection(self.h(INTEL_MODE)) == SECURE_MODE => normal,
+                INTEL_PROBE if selection(self.h(INTEL_MODE)) == SECURE_MODE => self.intel.secure_cancel.is_some(),
                 INTEL_RECORD | INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), SYSLOG_MODE | REPLAY_MODE) => {
                     false
                 }
@@ -1084,7 +1086,7 @@ impl Native {
                 _ => normal && exists,
             };
             unsafe {
-                EnableWindow(self.h(id), i32::from(allow && !busy));
+                EnableWindow(self.h(id), i32::from(allow && (!busy || id == INTEL_PROBE && self.intel.secure_cancel.is_some())));
             }
         }
         for i in 0..(NAV_END - NAV) {
@@ -1384,6 +1386,11 @@ impl Native {
         }
     }
     fn action(&mut self, id: i32, notification: u16) -> Result<()> {
+        if id == INTEL_PROBE && self.intel.secure_cancel.is_some() {
+            if let Some(cancel) = &self.intel.secure_cancel { cancel.stop(); }
+            self.set_notice("Menghentikan sesi aman…");
+            return Ok(());
+        }
         if self.is_busy() {
             return Ok(());
         }

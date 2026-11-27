@@ -118,6 +118,7 @@ enum IntelReply {
     Syslog(ni::syslog::Summary),
     FlowReplay(ni::flow_replay::Report),
     SecureHistory(Vec<ni::secure_monitor::Report>),
+    SecureSession(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>, ni::secure_bridge::SessionResult),
     IpamPivot(Vec<ni::ipam_notes::Note>, String, String),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
@@ -184,6 +185,8 @@ struct IntelState {
     syslog_summary: Option<ni::syslog::Summary>,
     flow_replay: Option<ni::flow_replay::Report>,
     secure_history: Vec<ni::secure_monitor::Report>,
+    secure_attempts: Vec<ni::secure_attempt::Attempt>,
+    secure_cancel: Option<ni::secure_bridge::SessionCancel>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -1130,6 +1133,8 @@ impl Native {
         if mode == SECURE_MODE {
             set(self.h(INTEL_ROUTER), "SNMPv3 GET");
             set(self.h(INTEL_IMPORT), "TLS Syslog");
+            set(self.h(INTEL_RECORD), "Polling SNMP");
+            set(self.h(INTEL_PROBE), "Stop sesi");
             set(self.h(INTEL_HISTORY), "Histori aman");
         }
         if mode == DHCP6_MODE || mode == DHCP6_HISTORY_MODE {
@@ -1197,6 +1202,7 @@ impl Native {
             Err(TryRecvError::Disconnected) => Err("Pekerjaan analisis terhenti.".into()),
         };
         self.intel.work = None;
+        self.intel.secure_cancel = None;
         if self.intel.storage_loading {
             self.intel.storage_loading = false;
             self.intel.storage_failed = result.is_err();
@@ -1250,6 +1256,15 @@ impl Native {
                 self.intel.alert_path = None;
                 self.intel.collector = Some(c);
                 select(self.h(INTEL_MODE), 13);
+            }
+            Ok(IntelReply::SecureSession(rows, attempts, result)) => {
+                self.intel.secure_history = rows;
+                self.intel.secure_attempts = attempts;
+                select(self.h(INTEL_MODE), SECURE_MODE);
+                self.intel.mode = SECURE_MODE;
+                self.intel_mode_labels(SECURE_MODE);
+                let message = format!("Sesi aman selesai: {} observasi tersimpan · dihentikan {} · gagal {}.", result.saved, result.stopped, result.failed);
+                notice = Some(if result.failed { Notice::Warning(message) } else { Notice::Information(message) });
             }
             Ok(IntelReply::SecureHistory(rows)) => {
                 self.intel.secure_history = rows;
@@ -1734,11 +1749,12 @@ impl Native {
                     })?;
                 }
             }
-            INTEL_ROUTER if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+            INTEL_ROUTER | INTEL_RECORD if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+                let polling = id == INTEL_RECORD;
                 ni::secure_bridge::available()?;
                 let target: std::net::SocketAddr = get(self.h(INTEL_HOST)).parse().map_err(|_| "Gunakan IP:port SNMP eksplisit.")?;
                 if !ni::secure_monitor::valid_address(target) { return Err("Target SNMP tidak valid.".into()); }
-                if popup(self.hwnd, &format!("GET sysUpTime.0 authPriv ke {target}? Hanya perangkat yang diizinkan. Hasil ringkas disimpan lokal."), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) != IDYES { return Ok(()); }
+                if popup(self.hwnd, &format!("{} sysUpTime.0 authPriv ke {target}? Hanya perangkat yang diizinkan. Hasil ringkas disimpan lokal. Polling maksimal 10 GET, jeda 30 detik dan berhenti saat gagal.", if polling { "Polling" } else { "GET" }), MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) != IDYES { return Ok(()); }
                 let Some(auth) = ask_session_credentials(self.hwnd, &target.to_string(), "SNMPv3 autentikasi", "Username dan password autentikasi SHA-256. Tidak disimpan.")? else { return Ok(()); };
                 let Some(privacy) = ask_session_credentials(self.hwnd, &target.to_string(), "SNMPv3 privasi", "Username yang sama dan password privasi AES-128 yang berbeda.")? else { return Ok(()); };
                 let units = |v: &[u16]| v.iter().position(|&n| n == 0).unwrap_or(v.len());
@@ -1769,11 +1785,24 @@ impl Native {
                 fn as_text(b: &[u8]) -> &str { std::str::from_utf8(b).unwrap_or("") }
                 serde_json::to_writer(&mut secret.0, &Pipe { username: as_text(&user.0), auth_password: as_text(&ap.0), privacy_password: as_text(&pp.0) }).map_err(|_| "Serialisasi credential gagal.")?;
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
-                self.start_intel(move || {
-                    let report = ni::secure_bridge::snmp(target, secret)?;
-                    ni::secure_monitor::append(&path, &report)?;
-                    Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
-                })?;
+                if polling {
+                    let cancel = ni::secure_bridge::SessionCancel::default();
+                    let worker_cancel = cancel.clone();
+                    self.start_intel(move || {
+                        let result = ni::secure_bridge::poll_session(target, secret, &path, &worker_cancel)?;
+                        Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
+                            ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?, result))
+                    })?;
+                    self.intel.secure_cancel = Some(cancel);
+                    self.set_notice("Polling SNMP berjalan; Stop sesi untuk membatalkan.");
+                    self.controls();
+                } else {
+                    self.start_intel(move || {
+                        let report = ni::secure_bridge::snmp(target, secret)?;
+                        ni::secure_monitor::append(&path, &report)?;
+                        Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
+                    })?;
+                }
             }
             INTEL_ROUTER if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 self.configure_polling()?
@@ -1810,13 +1839,27 @@ impl Native {
                 ni::secure_bridge::available()?;
                 let Some(config) = typed_file_dialog(self.hwnd,false,"","Konfigurasi TLS JSON (*.json)\0*.json\0","json")? else { return Ok(()); };
                 let expected = ni::secure_bridge::TlsConfig::read(&config)?;
-                if popup(self.hwnd,&format!("Terima satu koneksi mutual TLS pada {}? {} pin klien diotorisasi. Hanya ringkasan tersimpan; tidak membuka plaintext atau service permanen.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES { return Ok(()); }
+                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: collector 5 menit (maks 128 koneksi). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
+                if choice != IDYES && choice != IDNO { return Ok(()); }
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
-                self.start_intel(move || {
-                    let report = ni::secure_bridge::tls(&config,&expected)?;
-                    ni::secure_monitor::append(&path,&report)?;
-                    Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
-                })?;
+                if choice == IDYES {
+                    let cancel = ni::secure_bridge::SessionCancel::default();
+                    let worker_cancel = cancel.clone();
+                    self.start_intel(move || {
+                        let result = ni::secure_bridge::collect_tls(&expected,&path,&worker_cancel)?;
+                        Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
+                            ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?, result))
+                    })?;
+                    self.intel.secure_cancel = Some(cancel);
+                    self.set_notice("Collector TLS berjalan; Stop sesi untuk membatalkan.");
+                    self.controls();
+                } else {
+                    self.start_intel(move || {
+                        let report = ni::secure_bridge::tls(&config,&expected)?;
+                        ni::secure_monitor::append(&path,&report)?;
+                        Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?))
+                    })?;
+                }
             }
             INTEL_IMPORT if selection(self.h(INTEL_MODE)) == REPLAY_MODE => {
                 if let Some(path) = typed_file_dialog(self.hwnd, false, "",
@@ -1910,7 +1953,9 @@ impl Native {
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
-                self.start_intel(move || Ok(IntelReply::SecureHistory(ni::secure_monitor::page(&path)?)))?;
+                self.start_intel(move || Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
+                    ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?,
+                    ni::secure_bridge::SessionResult::default())))?;
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 let authority = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
@@ -2577,7 +2622,13 @@ impl Native {
                     push([report.label().into(), report.scope(), report.summary(), format!("UTC {}",report.stamp())],
                         &|| format!("{}\n{}\n{}\nObservasi historis, bukan status online saat ini.",report.label(),report.scope(),report.summary()));
                 }
-                "Secure Transport · GET SNMPv3 (IP:port) atau TLS Syslog satu sesi. Histori hanya ringkasan tervalidasi; build tanpa helper terverifikasi tidak mengaktifkan transport."
+                for attempt in &self.intel.secure_attempts {
+                    push(["Polling SNMP".into(),attempt.target.to_string(),
+                        if attempt.success { "Berhasil".into() } else { "Gagal / ditolak".into() },
+                        format!("UTC {}",attempt.stamp)],
+                        &|| format!("Durasi {} ms. Kegagalan tidak membuktikan sebab autentikasi tertentu.",attempt.elapsed_ms));
+                }
+                "Secure Transport · SNMP GET/polling 10 sampel; TLS satu sesi atau collector 5 menit. Stop sesi membatalkan pekerjaan. Histori lokal bukan status online. Helper harus terverifikasi."
             }
             REPLAY_MODE => {
                 if let Some(report) = &self.intel.flow_replay {
@@ -3930,7 +3981,7 @@ impl Native {
             (INTEL_FLOW, mode != STORAGE_MODE && mode != SECURE_MODE),
             (INTEL_HISTORY, mode != STORAGE_MODE),
             (INTEL_REDACT, mode != STORAGE_MODE && mode != SECURE_MODE),
-            (INTEL_PROBE, mode != SECURE_MODE),
+            (INTEL_PROBE, true),
         ] {
             unsafe {
                 ShowWindow(
