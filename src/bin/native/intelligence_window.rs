@@ -56,7 +56,8 @@ const SYSLOG_MODE: usize = 30;
 const REPLAY_MODE: usize = 31;
 const SECURE_MODE: usize = 32;
 const IPAM_HISTORY_MODE: usize = 33;
-const INTEL_MODES: [&str; 34] = [
+const IPAM_EVIDENCE_MODE:usize=34;
+const INTEL_MODES: [&str; 35] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -91,6 +92,7 @@ const INTEL_MODES: [&str; 34] = [
     "Replay Flow offline",
     "Secure Transport",
     "Histori revisi IPAM",
+    "Bukti historis subnet",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -124,6 +126,7 @@ enum IntelReply {
     SecureSession(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>, ni::secure_bridge::SessionResult),
     IpamPivot(Vec<ni::ipam_notes::Note>, String, String),
     IpamHistory(String, String, Vec<ni::ipam_notes::Note>),
+    IpamEvidence(String,String,Vec<ni::ipam_evidence::Capture>),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -184,6 +187,8 @@ struct IntelState {
     ipam_notes: Vec<ni::ipam_notes::Note>,
     visible_notes: Vec<ni::ipam_notes::Note>,
     visible_subnet_keys: Vec<Option<(String, String)>>,
+    visible_subnet_evidence:Vec<Option<ni::ipam_evidence::Capture>>,
+    ipam_evidence:Option<(String,String,Vec<ni::ipam_evidence::Capture>)>,
     ipam_pivot_draft: Option<(String, String, i64)>,
     ipam_history: Option<(String, String, Vec<ni::ipam_notes::Note>)>,
     rendered_mode: Option<usize>,
@@ -1160,7 +1165,11 @@ impl Native {
             set(self.h(INTEL_HISTORY), "Undo metadata");
             set(self.h(INTEL_PROBE), "Revisi IPAM");
         }
-        if mode == IPAM_HISTORY_MODE {
+        if mode==SUBNET_MODE {
+            set(self.h(INTEL_RECORD),"Simpan bukti");
+            set(self.h(INTEL_HISTORY),"Histori bukti");
+        }
+        if matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE) {
             set(self.h(INTEL_SEARCH), "Cari");
             set(self.h(INTEL_MORE), "Lebih lama");
             set(self.h(INTEL_HISTORY), "Terbaru");
@@ -1321,6 +1330,14 @@ impl Native {
                 select(self.h(INTEL_MODE), DHCP6_HISTORY_MODE);
                 self.intel.mode = DHCP6_HISTORY_MODE;
                 self.intel_mode_labels(DHCP6_HISTORY_MODE);
+            }
+            Ok(IntelReply::IpamEvidence(scope,cidr,rows)) => {
+                self.intel.ipam_evidence=Some((scope,cidr,rows));
+                self.intel.filter.clear();
+                select(self.h(INTEL_MODE),IPAM_EVIDENCE_MODE);
+                self.intel.mode=IPAM_EVIDENCE_MODE;
+                set(self.h(INTEL_FILTER),"");
+                self.intel_mode_labels(IPAM_EVIDENCE_MODE);
             }
             Ok(IntelReply::IpamHistory(scope,cidr,rows)) => {
                 self.intel.ipam_history=Some((scope,cidr,rows));
@@ -1632,6 +1649,30 @@ impl Native {
                     }
                 }
             }
+            INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SUBNET_MODE => {
+                let capture=self.selected_intel_row().and_then(|i|self.intel.visible_subnet_evidence.get(i))
+                    .and_then(Option::as_ref).cloned().ok_or("Pilih subnet dengan scope terverifikasi.")?;
+                let save=id==INTEL_RECORD;
+                if save && (self.intel.recovery_view.is_some() || popup(self.hwnd,
+                    &format!("Simpan bukti agregat {} pada UTC {}? Tidak menyatakan alamat bebas atau assignment.",capture.cidr,capture.observed_at),
+                    MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION)!=IDYES) {return Ok(());}
+                let path=self.primary_archive_path()?.with_file_name("ipam-evidence-v1.sqlite3");
+                self.start_intel(move || {
+                    if save {ni::ipam_evidence::save(&path,&capture)?;}
+                    let rows=ni::ipam_evidence::page(&path,&capture.scope,&capture.cidr,None)?;
+                    Ok(IntelReply::IpamEvidence(capture.scope,capture.cidr,rows))
+                })?;
+            }
+            INTEL_MORE | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == IPAM_EVIDENCE_MODE => {
+                let (scope,cidr,rows)=self.intel.ipam_evidence.as_ref().ok_or("Pilih subnet terlebih dahulu.")?;
+                let before=if id==INTEL_MORE {Some(rows.last().ok_or("Tidak ada bukti lebih lama.")?.observed_at)} else {None};
+                let (scope,cidr)=(scope.clone(),cidr.clone());
+                let path=self.primary_archive_path()?.with_file_name("ipam-evidence-v1.sqlite3");
+                self.start_intel(move || {
+                    let rows=ni::ipam_evidence::page(&path,&scope,&cidr,before)?;
+                    Ok(IntelReply::IpamEvidence(scope,cidr,rows))
+                })?;
+            }
             INTEL_MORE | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == IPAM_HISTORY_MODE => {
                 let (scope,cidr,rows)=self.intel.ipam_history.as_ref().ok_or("Pilih metadata dari modul IPAM terlebih dahulu.")?;
                 let before=if id==INTEL_MORE {Some(rows.last().ok_or("Tidak ada revisi lebih lama.")?.revision)} else {None};
@@ -1759,6 +1800,15 @@ impl Native {
             }
             INTEL_BACK => {
                 let mode = selection(self.h(INTEL_MODE));
+                if mode==IPAM_EVIDENCE_MODE {
+                    select(self.h(INTEL_MODE),SUBNET_MODE);
+                    self.intel.mode=SUBNET_MODE;
+                    self.intel.filter.clear();
+                    set(self.h(INTEL_FILTER),"");
+                    self.intel_mode_labels(SUBNET_MODE);
+                    self.render_intel();
+                    return Ok(());
+                }
                 if mode == IPAM_HISTORY_MODE {
                     select(self.h(INTEL_MODE),NOTES_MODE);
                     self.intel.mode=NOTES_MODE;
@@ -2351,6 +2401,7 @@ impl Native {
         let mut visual_series = Vec::new();
         let mut visible_notes = Vec::new();
         let mut visible_subnet_keys = Vec::new();
+        let mut visible_subnet_evidence=Vec::new();
         let description = match mode {
             DASHBOARD_MODE => {
                 let mut row = |values: [String; 4],
@@ -2687,6 +2738,17 @@ impl Native {
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Simpan menampilkan overlap snapshot scope yang sama. Isi editor, Undo, backup dan Pulihkan salinan baru. Reset sebelum membuat key baru."
             }
+            IPAM_EVIDENCE_MODE => {
+                if let Some((scope,cidr,rows))=&self.intel.ipam_evidence {
+                    for row in rows {
+                        push([format!("UTC {}",row.observed_at),cidr.clone(),
+                            format!("{} konfigurasi / {} IP teramati",row.configured,row.observed),
+                            if row.partial {"Parsial".into()}else{"Snapshot sumber".into()}],
+                            &||format!("{scope}\n{cidr}\nDiamati UTC {} · dicatat UTC {}\nTidak teramati ≠ bebas.",row.observed_at,row.recorded_at));
+                    }
+                }
+                "Bukti agregat historis per scope/prefix terverifikasi. Tidak membuktikan assignment atau utilisasi pasti."
+            }
             IPAM_HISTORY_MODE => {
                 if let Some((scope,cidr,rows))=&self.intel.ipam_history {
                     for n in rows {
@@ -2882,6 +2944,7 @@ impl Native {
                         && search.matches(&values.each_ref().map(String::as_str))
                     {
                         visible_subnet_keys.push(r.operator_scope.as_ref().map(|key| (key.clone(), r.prefix.to_string())));
+                        visible_subnet_evidence.push(ni::ipam_evidence::Capture::from_row(r,ni::now()));
                     }
                     push(
                         values,
@@ -4024,7 +4087,7 @@ impl Native {
         unsafe {
             ShowWindow(
                 self.h(INTEL_MORE),
-                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE | DASHBOARD_MODE | IPAM_HISTORY_MODE) {
+                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE | DASHBOARD_MODE | IPAM_HISTORY_MODE | IPAM_EVIDENCE_MODE) {
                     SW_SHOW
                 } else {
                     SW_HIDE
@@ -4041,7 +4104,7 @@ impl Native {
             ),
             (
                 INTEL_BACK,
-                mode == IPAM_HISTORY_MODE || mode == ARCHIVE_MODE && self.intel.pivot_scope.is_some()
+                matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE) || mode == ARCHIVE_MODE && self.intel.pivot_scope.is_some()
                     || mode == DEVICE_MODE && self.intel.previous_mode.is_some(),
             ),
         ] {
@@ -4062,11 +4125,11 @@ impl Native {
             (INTEL_FLOW, mode != STORAGE_MODE && mode != SECURE_MODE),
             (INTEL_HISTORY, mode != STORAGE_MODE),
             (INTEL_REDACT, mode != STORAGE_MODE && mode != SECURE_MODE),
-            (INTEL_PROBE, mode != IPAM_HISTORY_MODE),
-            (INTEL_ROUTER, mode != IPAM_HISTORY_MODE),
-            (INTEL_IMPORT, mode != IPAM_HISTORY_MODE),
-            (INTEL_RECORD, mode != IPAM_HISTORY_MODE),
-            (INTEL_EXPORT, mode != IPAM_HISTORY_MODE),
+            (INTEL_PROBE, !matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE)),
+            (INTEL_ROUTER, !matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE)),
+            (INTEL_IMPORT, !matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE)),
+            (INTEL_RECORD, !matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE)),
+            (INTEL_EXPORT, !matches!(mode,IPAM_HISTORY_MODE|IPAM_EVIDENCE_MODE)),
         ] {
             unsafe {
                 ShowWindow(
@@ -4088,6 +4151,7 @@ impl Native {
         let headers = match mode {
             SECURE_MODE => ["Transport", "Target / identitas", "Hasil", "Waktu UTC"],
             IPAM_HISTORY_MODE => ["Revisi", "Scope / prefix", "Status metadata", "Waktu UTC"],
+            IPAM_EVIDENCE_MODE => ["Waktu observasi", "Prefix", "Bukti", "Cakupan"],
             REPLAY_MODE => ["Metrik", "Sumber", "Jumlah", "Keterangan"],
             SUBNET_MODE => ["Prefix", "Scope", "Observasi", "Cakupan"],
             DHCP6_HISTORY_MODE => ["Snapshot", "Identitas", "Bukti", "Status"],
@@ -4119,6 +4183,7 @@ impl Native {
         self.intel.visual_series = visual_series;
         self.intel.visible_notes = visible_notes;
         self.intel.visible_subnet_keys = visible_subnet_keys;
+        self.intel.visible_subnet_evidence=visible_subnet_evidence;
         set(
             self.h(INTEL_STATUS),
             &format!(

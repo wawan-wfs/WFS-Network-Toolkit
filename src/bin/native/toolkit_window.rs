@@ -1044,6 +1044,11 @@ impl Native {
                 INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
                     normal && self.intel.recovery_view.is_none()
                 }
+                INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE))==SUBNET_MODE => {
+                    normal && self.intel.visible_subnet_evidence.iter().any(Option::is_some)
+                }
+                INTEL_RECORD if selection(self.h(INTEL_MODE))==IPAM_EVIDENCE_MODE => false,
+                INTEL_HISTORY if selection(self.h(INTEL_MODE))==IPAM_EVIDENCE_MODE => normal && self.intel.ipam_evidence.is_some(),
                 INTEL_RECORD | INTEL_HISTORY => normal,
                 INTEL_EXPORT => {
                     normal
@@ -1077,6 +1082,7 @@ impl Native {
                             ARCHIVE_MODE => self.intel.archived.as_ref().is_some_and(|p| p.next.is_some()),
                             DASHBOARD_MODE => !self.intel.dashboard_charts.is_empty(),
                             IPAM_HISTORY_MODE => self.intel.ipam_history.as_ref().is_some_and(|(_,_,rows)| rows.len()==25 && rows.last().is_some_and(|n|n.revision>1)),
+                            IPAM_EVIDENCE_MODE => self.intel.ipam_evidence.as_ref().is_some_and(|(_,_,rows)| rows.len()==25 && rows.last().is_some_and(|n|n.observed_at>1)),
                             DHCP6_HISTORY_MODE => self.intel.dhcp6_history.as_ref()
                                 .is_some_and(|(_, rows)| rows.len() == 20),
                             _ => false,

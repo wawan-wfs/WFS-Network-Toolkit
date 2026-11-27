@@ -19,6 +19,7 @@ pub mod graph;
 pub mod history;
 pub mod interface_trend;
 pub mod ipam_notes;
+pub mod ipam_evidence;
 pub mod network_map;
 pub mod overview;
 pub mod polling;
