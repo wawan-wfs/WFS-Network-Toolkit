@@ -1,6 +1,6 @@
 //! Windows-only opt-in bridge. No helper is enabled in ordinary builds.
 //! The verified installer must protect the executable directory with OS ACLs.
-use super::secure_monitor::{Report, MAX_REPORT, pin_valid, valid_address};
+use super::secure_monitor::{CertificateMaterial, Report, MAX_REPORT, pin_valid, valid_address};
 use crate::Result;
 use sha2::{Digest, Sha256};
 use std::{io::{BufRead, BufReader, Read, Write}, net::SocketAddr, os::windows::process::CommandExt, path::{Path, PathBuf}, process::{Command, Stdio}, time::{Duration, Instant}};
@@ -44,6 +44,7 @@ fn helper() -> Result<(PathBuf, std::fs::File)> {
     if actual != expected || total != metadata.len() { return Err("Checksum Secure Transport tidak cocok.".into()); }
     Ok((path, file))
 }
+pub fn configured() -> bool { option_env!("WENET_SECURE_HELPER_SHA256").is_some_and(pin_valid) }
 pub fn available() -> Result<()> { helper().map(|_| ()) }
 
 fn execute(args: &[&std::ffi::OsStr], secret: Option<SecretBytes>, seconds: u64) -> Result<Report> {
@@ -112,6 +113,33 @@ pub struct TlsConfig {
     pub allowed_client_sha256: Vec<String>,
     #[serde(default)]
     pub client_crl: Option<PathBuf>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub material: Option<CertificateMaterial>,
+}
+fn material_hash(path:&Path,cap:u64)->Result<String> {
+    use std::os::windows::fs::{MetadataExt,OpenOptionsExt};
+    let meta=std::fs::symlink_metadata(path).map_err(|_|"File material TLS tidak tersedia.")?;
+    if !meta.is_file() || meta.file_attributes() & 0x400 !=0 || meta.len()==0 || meta.len()>cap {
+        return Err("File material TLS tidak reguler atau melewati batas.".into());
+    }
+    let mut file=std::fs::OpenOptions::new().read(true).share_mode(1)
+        .open(path).map_err(|_|"Material TLS tidak dapat dibaca.")?;
+    let meta=file.metadata().map_err(|_|"Metadata material TLS gagal.")?;
+    if !meta.is_file() || meta.file_attributes() & 0x400 !=0 || meta.len()==0 || meta.len()>cap {
+        return Err("Material TLS tidak valid.".into());
+    }
+    let mut hash=Sha256::new();
+    let mut bytes=SecretBytes(vec![0;8192]);
+    let mut total=0u64;
+    loop {
+        let n=file.read(&mut bytes.0).map_err(|_|"Baca material TLS gagal.")?;
+        if n==0 { break; }
+        total+=n as u64;
+        if total>cap { return Err("Material TLS melampaui batas.".into()); }
+        hash.update(&bytes.0[..n]);
+    }
+    if total!=meta.len() { return Err("Ukuran material TLS berubah.".into()); }
+    Ok(hash.finalize().iter().map(|b|format!("{b:02x}")).collect())
 }
 impl TlsConfig {
     pub fn read(path: &Path) -> Result<Self> {
@@ -120,7 +148,7 @@ impl TlsConfig {
         let mut data = Vec::new();
         file.take(16_385).read_to_end(&mut data).map_err(|_| "Baca konfigurasi TLS gagal.")?;
         if data.len() > 16_384 { return Err("Konfigurasi TLS terlalu besar.".into()); }
-        let c: Self = serde_json::from_slice(&data).map_err(|_| "Konfigurasi TLS tidak valid.")?;
+        let mut c: Self = serde_json::from_slice(&data).map_err(|_| "Konfigurasi TLS tidak valid.")?;
         if !valid_address(c.bind) || !(1..=32).contains(&c.allowed_client_sha256.len())
             || c.allowed_client_sha256.iter().any(|p| !pin_valid(p))
             || c.allowed_client_sha256.iter().collect::<std::collections::BTreeSet<_>>().len() != c.allowed_client_sha256.len()
@@ -128,6 +156,13 @@ impl TlsConfig {
             || c.client_crl.as_ref().is_some_and(|p| !p.is_absolute()) {
             return Err("Bind, path absolut atau pin TLS tidak valid.".into());
         }
+        if c.material.is_some() { return Err("Hash material dihitung oleh WeNet, bukan konfigurasi operator.".into()); }
+        c.material=Some(CertificateMaterial {
+            server_chain:material_hash(&c.server_chain,1024*1024)?,
+            server_key:material_hash(&c.server_key,128*1024)?,
+            client_ca:material_hash(&c.client_ca,1024*1024)?,
+            client_crl:c.client_crl.as_ref().map(|p|material_hash(p,1024*1024)).transpose()?,
+        });
         Ok(c)
     }
 }
@@ -136,7 +171,7 @@ pub fn tls(path: &Path, expected: &TlsConfig) -> Result<Report> {
     let actual = TlsConfig::read(path)?;
     if actual.bind != expected.bind || actual.allowed_client_sha256 != expected.allowed_client_sha256
         || actual.server_chain != expected.server_chain || actual.server_key != expected.server_key
-        || actual.client_ca != expected.client_ca || actual.client_crl != expected.client_crl { return Err("Konfigurasi TLS berubah; batalkan.".into()); }
+        || actual.client_ca != expected.client_ca || actual.client_crl != expected.client_crl || actual.material != expected.material { return Err("Konfigurasi TLS berubah; batalkan.".into()); }
     // Pass the exact confirmed configuration rather than a mutable file path.
     // The certificate/key files still require OS ACL protection.
     let mut payload = SecretBytes(Vec::with_capacity(16_384));
@@ -148,11 +183,25 @@ pub fn tls(path: &Path, expected: &TlsConfig) -> Result<Report> {
     Ok(r)
 }
 
+#[derive(Default)]
+struct SessionState {
+    stopped:std::sync::atomic::AtomicBool,
+    saved:std::sync::atomic::AtomicUsize,
+    rejected:std::sync::atomic::AtomicUsize,
+}
 #[derive(Clone, Default)]
-pub struct SessionCancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
+pub struct SessionCancel(std::sync::Arc<SessionState>);
 impl SessionCancel {
-    pub fn stop(&self) { self.0.store(true, std::sync::atomic::Ordering::Release); }
-    pub fn stopped(&self) -> bool { self.0.load(std::sync::atomic::Ordering::Acquire) }
+    pub fn stop(&self) { self.0.stopped.store(true, std::sync::atomic::Ordering::Release); }
+    pub fn stopped(&self) -> bool { self.0.stopped.load(std::sync::atomic::Ordering::Acquire) }
+    fn progress(&self, saved:usize,rejected:usize) {
+        self.0.saved.store(saved,std::sync::atomic::Ordering::Release);
+        self.0.rejected.store(rejected,std::sync::atomic::Ordering::Release);
+    }
+    pub fn counts(&self)->(usize,usize) {
+        (self.0.saved.load(std::sync::atomic::Ordering::Acquire),
+            self.0.rejected.load(std::sync::atomic::Ordering::Acquire))
+    }
     fn check(&self) -> Result<()> {
         if self.stopped() { Err("Sesi dihentikan.".into()) } else { Ok(()) }
     }
@@ -186,6 +235,7 @@ pub fn poll_session(target: SocketAddr, credentials: SecretBytes, path: &Path,
                 super::secure_monitor::append_poll(path, target, super::now(),
                     started.elapsed().as_millis().min(60_000) as u64, Some(&report))?;
                 result.saved += 1;
+                cancel.progress(result.saved,result.rejected);
             }
             Err(_) if cancel.stopped() => break,
             Err(_) => {
@@ -258,6 +308,7 @@ pub fn collect_tls(expected: &TlsConfig, path: &Path, cancel: &SessionCancel) ->
                     }
                     super::secure_monitor::append(path, &report)?;
                     if authorized { result.saved += 1; } else { result.rejected += 1; }
+                    cancel.progress(result.saved,result.rejected);
                 }
                 Ok(Err(e)) => return Err(e),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

@@ -194,6 +194,7 @@ struct IntelState {
     secure_history: Vec<ni::secure_monitor::Report>,
     secure_attempts: Vec<ni::secure_attempt::Attempt>,
     secure_cancel: Option<ni::secure_bridge::SessionCancel>,
+    secure_displayed: Option<(usize,usize,bool)>,
 }
 impl IntelState {
     fn assessments(&self) -> Vec<Assessment> {
@@ -1207,6 +1208,16 @@ impl Native {
         self.controls();
         Ok(())
     }
+    fn show_secure_progress(&mut self) {
+        let Some(cancel)=&self.intel.secure_cancel else { self.intel.secure_displayed=None; return; };
+        let (saved,rejected)=cancel.counts();
+        let value=(saved,rejected,cancel.stopped());
+        if self.intel.secure_displayed!=Some(value) {
+            self.intel.secure_displayed=Some(value);
+            self.set_notice(&format!("{} · {} ringkasan committed · {} penolakan TLS",
+                if value.2 {"Menghentikan sesi aman"} else {"Sesi aman berjalan"},saved,rejected));
+        }
+    }
     fn finish_intel(&mut self) {
         let Some(rx) = &self.intel.work else { return };
         let result = match rx.try_recv() {
@@ -1893,7 +1904,10 @@ impl Native {
                 ni::secure_bridge::available()?;
                 let Some(config) = typed_file_dialog(self.hwnd,false,"","Konfigurasi TLS JSON (*.json)\0*.json\0","json")? else { return Ok(()); };
                 let expected = ni::secure_bridge::TlsConfig::read(&config)?;
-                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: stream 30 menit (maks 1024 koneksi, 4 bersamaan, 16384 event). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan. CRL: {}.",expected.bind,expected.allowed_client_sha256.len(),if expected.client_crl.is_some(){"aktif (strict)"}else{"tidak dikonfigurasi"}),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
+                let material=expected.material.as_ref().ok_or("Hash material TLS tidak tersedia.")?;
+                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien.\nCA file SHA-256: {}\nServer chain SHA-256: {}\nYa: streaming 30 menit. Tidak: satu sesi. Batal: tidak membuka listener. CRL: {}.",
+                    expected.bind,expected.allowed_client_sha256.len(),material.client_ca,material.server_chain,
+                    if expected.client_crl.is_some(){"aktif (strict)"}else{"tidak dikonfigurasi"}),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
                 if choice != IDYES && choice != IDNO { return Ok(()); }
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
                 if choice == IDYES {

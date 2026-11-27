@@ -1026,7 +1026,9 @@ impl Native {
                 {
                     normal && self.intel.recovery_view.is_none()
                 }
-                INTEL_RECORD if selection(self.h(INTEL_MODE)) == SECURE_MODE => normal,
+                INTEL_RECORD | INTEL_ROUTER | INTEL_IMPORT if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
+                    normal && ni::secure_bridge::configured()
+                }
                 INTEL_PROBE if selection(self.h(INTEL_MODE)) == SECURE_MODE => self.intel.secure_cancel.is_some(),
                 INTEL_RECORD | INTEL_HISTORY if matches!(selection(self.h(INTEL_MODE)), SYSLOG_MODE | REPLAY_MODE) => {
                     false
@@ -2051,6 +2053,7 @@ fn start_ui(smoke: bool) -> Result<()> {
             (true, WM_TIMER, PULSE) => {
                 ui.finish_refresh();
                 ui.finish_intel();
+                ui.show_secure_progress();
                 ui.poll_router_step();
                 if let Some(r) = ui.model.finish() {
                     ui.reply(r);

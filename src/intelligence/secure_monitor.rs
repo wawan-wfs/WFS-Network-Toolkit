@@ -10,6 +10,24 @@ const SCHEMA: &str = include_str!("sql/secure_monitor_schema.sql");
 const MIGRATION: &str = include_str!("sql/secure_monitor_v2.sql");
 pub const MAX_REPORT: usize = 16_384;
 
+/// Exact file-content hashes bound to a desktop confirmation. The private
+/// key digest is internal IPC metadata, never shown or stored in history.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CertificateMaterial {
+    pub server_chain: String,
+    pub server_key: String,
+    pub client_ca: String,
+    pub client_crl: Option<String>,
+}
+impl CertificateMaterial {
+    pub fn valid(&self, has_crl: bool) -> bool {
+        pin_valid(&self.server_chain) && pin_valid(&self.server_key) && pin_valid(&self.client_ca)
+            && self.client_crl.is_some()==has_crl
+            && self.client_crl.as_deref().is_none_or(pin_valid)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {

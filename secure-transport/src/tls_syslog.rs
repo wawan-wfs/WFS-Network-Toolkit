@@ -16,6 +16,8 @@ struct Config {
     allowed_client_sha256: Vec<String>,
     #[serde(default)]
     client_crl: Option<PathBuf>,
+    #[serde(default)]
+    material: Option<wfs_network_toolkit::intelligence::secure_monitor::CertificateMaterial>,
 }
 fn bounded_file(path: &Path, cap: usize) -> Result<Vec<u8>> {
     let file = File::open(path).map_err(|_| "File konfigurasi/sertifikat tidak dapat dibuka.")?;
@@ -47,8 +49,15 @@ fn pins(values: &[String]) -> Result<BTreeSet<String>> {
 fn fingerprint(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
-fn certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
+fn verify_material(bytes:&[u8],expected:Option<&str>)->Result<()> {
+    if expected.is_some_and(|hash|fingerprint(bytes)!=hash) {
+        return Err("Material sertifikat berubah sejak konfirmasi.".into());
+    }
+    Ok(())
+}
+fn certs(path: &Path, expected:Option<&str>) -> Result<Vec<CertificateDer<'static>>> {
     let bytes = bounded_file(path, 1024 * 1024)?;
+    verify_material(&bytes,expected)?;
     let result = rustls_pemfile::certs(&mut Cursor::new(bytes))
         .collect::<io::Result<Vec<_>>>().map_err(|_| "PEM sertifikat tidak valid.")?;
     if !(1..=16).contains(&result.len()) {
@@ -56,8 +65,9 @@ fn certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     }
     Ok(result)
 }
-fn key(path: &Path) -> Result<PrivateKeyDer<'static>> {
+fn key(path: &Path,expected:Option<&str>) -> Result<PrivateKeyDer<'static>> {
     let bytes = Zeroizing::new(bounded_file(path, 128 * 1024)?);
+    verify_material(&bytes,expected)?;
     let mut cursor = Cursor::new(bytes.as_slice());
     let key = rustls_pemfile::private_key(&mut cursor).map_err(|_| "PEM kunci tidak valid.")?
         .ok_or("Kunci server tidak ditemukan.")?;
@@ -69,13 +79,18 @@ fn key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 fn server(config: &Config) -> Result<Arc<ServerConfig>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut roots = RootCertStore::empty();
-    for cert in certs(&config.client_ca)? {
+    let material=config.material.as_ref();
+    if material.is_some_and(|m| !m.valid(config.client_crl.is_some())) {
+        return Err("Manifest material TLS tidak valid.".into());
+    }
+    for cert in certs(&config.client_ca,material.map(|m|m.client_ca.as_str()))? {
         roots.add(cert).map_err(|_| "CA klien tidak valid.")?;
     }
     // Mandatory client certificate validation. No custom verifier or trust bypass.
     let mut verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone());
     if let Some(path) = &config.client_crl {
         let bytes = bounded_file(path, 1024 * 1024)?;
+        verify_material(&bytes,material.and_then(|m|m.client_crl.as_deref()))?;
         let lists = rustls_pemfile::crls(&mut Cursor::new(bytes)).collect::<io::Result<Vec<_>>>()
             .map_err(|_| "PEM CRL tidak valid.")?;
         if !(1..=16).contains(&lists.len()) {
@@ -89,7 +104,8 @@ fn server(config: &Config) -> Result<Arc<ServerConfig>> {
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|_| "Versi TLS tidak tersedia.")?
         .with_client_cert_verifier(verifier)
-        .with_single_cert(certs(&config.server_chain)?, key(&config.server_key)?)
+        .with_single_cert(certs(&config.server_chain,material.map(|m|m.server_chain.as_str()))?,
+            key(&config.server_key,material.map(|m|m.server_key.as_str()))?)
         .map_err(|_| "Sertifikat/kunci server tidak cocok.")?;
     server.session_storage = Arc::new(NoServerSessionStorage {});
     server.send_tls13_tickets = 0;
@@ -175,6 +191,9 @@ fn config_from_pipe() -> Result<Config> {
     stdin.lock().take(16_385).read_to_end(&mut data).map_err(|_| "Input TLS gagal.")?;
     if data.len() > 16_384 { return Err("Input TLS terlalu besar.".into()); }
     let config: Config = serde_json::from_slice(&data).map_err(|_| "Konfigurasi TLS tidak valid.")?;
+    if config.material.as_ref().is_none_or(|m| !m.valid(config.client_crl.is_some())) {
+        return Err("Pipe TLS wajib membawa hash material yang dikonfirmasi.".into());
+    }
     Ok(config)
 }
 pub fn receive_pipe() -> Result<Value> {
@@ -350,6 +369,12 @@ fn receive_peer(socket: TcpStream, config: &Config, settings: Arc<ServerConfig>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn material_hash_mismatch_rejected() {
+        let expected=fingerprint(b"original");
+        assert!(verify_material(b"original",Some(&expected)).is_ok());
+        assert!(verify_material(b"rotated",Some(&expected)).is_err());
+    }
     #[test]
     fn pins_are_exact_and_reject_invalid_configuration() {
         let good = fingerprint(b"fixture");
