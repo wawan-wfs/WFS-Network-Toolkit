@@ -175,36 +175,60 @@ fn receive_config(config: Config) -> Result<Value> {
         .ok_or("Tidak ada koneksi TLS sebelum deadline.")?;
     receive_peer(socket, &config, settings, &allowed, Instant::now() + Duration::from_secs(24))
 }
-/// Bounded multi-connection listener. Reuses the validated server config,
-/// but every new connection independently proves its client identity.
-/// Only completed authenticated sessions are emitted; rejected peers do not
-/// terminate the listener. No raw Syslog or untrusted diagnostic text in IPC.
+/// Up to four concurrent admissions, no unbounded queue or thread creation.
+/// Each session has its own handshake and message deadline; the listener
+/// runs for at most 30 minutes or 1024 accepted sockets. Rejections are
+/// separate coarse events without claimed peer identity or raw error text.
 pub fn collect_pipe() -> Result<()> {
     let config = config_from_pipe()?;
     let allowed = pins(&config.allowed_client_sha256)?;
     let settings = server(&config)?;
     let listener = listener(config.bind)?;
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(1800);
     let mut output = io::stdout().lock();
-    let mut accepted = 0u32;
-    let mut rejected = 0u32;
-    for _ in 0..128 {
-        let Some(socket) = accept_before(&listener, deadline)? else { break };
-        match receive_peer(socket, &config, settings.clone(), &allowed, deadline) {
-            Ok(report) => {
-                serde_json::to_writer(&mut output, &report).map_err(|_| "Output collector gagal.")?;
-                output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "Output collector gagal.")?;
-                accepted += 1;
-            }
-            Err(_) => {
-                rejected += 1;
-                // Sequential admission with a small rejection delay; bound
-                // the number of attempts even under repeated hostile connects.
-                thread::sleep(Duration::from_millis(100));
-            }
+    let mut admissions = 0usize;
+    let mut active = 0usize;
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Value>(4);
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let config = Arc::new(config);
+    let allowed = Arc::new(allowed);
+    // Join completed workers as we go; only four handles can remain live.
+    loop {
+        while let Ok(report) = rx.try_recv() {
+            active -= 1;
+            serde_json::to_writer(&mut output,&report).map_err(|_| "Output collector gagal.")?;
+            output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "Output collector gagal.")?;
         }
+        let mut i=0;
+        while i<workers.len() {
+            if workers[i].is_finished() {
+                let worker: std::thread::JoinHandle<()> = workers.swap_remove(i);
+                worker.join().map_err(|_| "Worker TLS gagal.")?;
+            } else { i+=1; }
+        }
+        if (Instant::now() >= deadline || admissions >= 1024) && active == 0 { break; }
+        if Instant::now() < deadline && admissions < 1024 && active < 4 && workers.len() < 4 {
+            if let Some(socket)=accept_before(&listener,deadline.min(Instant::now()+Duration::from_millis(50)))? {
+                let settings=settings.clone();
+                let config=config.clone();
+                let allowed=allowed.clone();
+                let tx=tx.clone();
+                let worker=thread::Builder::new().name("wenet-tls-peer".into()).spawn(move || {
+                    let report=receive_peer(socket,&config,settings,&allowed,deadline).unwrap_or_else(|_| {
+                        json!({"schema":1,"transport":"tls_rejected","bind":config.bind.to_string(),
+                            "observed_utc":wfs_network_toolkit::intelligence::now(),
+                            "reason":"handshake_or_authorization_or_framing"})
+                    });
+                    let _=tx.send(report);
+                }).map_err(|_| "Worker TLS tidak dapat dimulai.")?;
+                workers.push(worker);
+                admissions+=1;
+                active+=1;
+            }
+        } else { thread::sleep(Duration::from_millis(25)); }
     }
-    eprintln!("WeNet collector: {accepted} sesi diterima, {rejected} sesi ditolak.");
+    drop(rx);
+    for worker in workers { worker.join().map_err(|_| "Worker TLS gagal.")?; }
     Ok(())
 }
 fn receive_peer(socket: TcpStream, config: &Config, settings: Arc<ServerConfig>,

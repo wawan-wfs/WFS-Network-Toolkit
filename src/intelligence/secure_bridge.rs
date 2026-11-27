@@ -157,6 +157,7 @@ impl SessionCancel {
 #[derive(Default, Debug)]
 pub struct SessionResult {
     pub saved: usize,
+    pub rejected: usize,
     pub stopped: bool,
     pub failed: bool,
 }
@@ -179,15 +180,14 @@ pub fn poll_session(target: SocketAddr, credentials: SecretBytes, path: &Path,
         let report = snmp_cancel(target, SecretBytes(credentials.0.clone()), cancel);
         match report {
             Ok(report) => {
-                super::secure_monitor::append(path, &report)?;
+                super::secure_monitor::append_poll(path, target, super::now(),
+                    started.elapsed().as_millis().min(60_000) as u64, Some(&report))?;
                 result.saved += 1;
-                super::secure_attempt::append(&path.with_file_name("secure-attempts-v1.sqlite3"),
-                    target, super::now(), started.elapsed().as_millis().min(60_000) as u64, true)?;
             }
             Err(_) if cancel.stopped() => break,
             Err(_) => {
-                super::secure_attempt::append(&path.with_file_name("secure-attempts-v1.sqlite3"),
-                    target, super::now(), started.elapsed().as_millis().min(60_000) as u64, false)?;
+                super::secure_monitor::append_poll(path, target, super::now(),
+                    started.elapsed().as_millis().min(60_000) as u64, None)?;
                 result.failed = true;
                 break;
             }
@@ -229,7 +229,7 @@ pub fn collect_tls(expected: &TlsConfig, path: &Path, cancel: &SessionCancel) ->
                 }
             }
         });
-        let deadline = Instant::now() + Duration::from_secs(310);
+        let deadline = Instant::now() + Duration::from_secs(1810);
         loop {
             if cancel.stopped() || Instant::now() >= deadline {
                 let _ = child.kill();
@@ -239,13 +239,15 @@ pub fn collect_tls(expected: &TlsConfig, path: &Path, cancel: &SessionCancel) ->
             }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Ok(report)) => {
-                    if result.saved >= 128 || report.stamp().abs_diff(super::now()) > 120
-                        || !matches!(&report, Report::Tls { bind, peer_certificate_sha256, .. }
-                            if *bind == expected.bind && expected.allowed_client_sha256.contains(peer_certificate_sha256)) {
+                    let authorized = matches!(&report, Report::Tls { bind, peer_certificate_sha256, .. }
+                        if *bind == expected.bind && expected.allowed_client_sha256.contains(peer_certificate_sha256));
+                    let rejected = matches!(&report, Report::TlsRejected { bind, .. } if *bind == expected.bind);
+                    if result.saved + result.rejected >= 1024 || report.stamp().abs_diff(super::now()) > 120
+                        || !(authorized || rejected) {
                         return Err("Identitas/batas laporan collector tidak cocok.".into());
                     }
                     super::secure_monitor::append(path, &report)?;
-                    result.saved += 1;
+                    if authorized { result.saved += 1; } else { result.rejected += 1; }
                 }
                 Ok(Err(e)) => return Err(e),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

@@ -1264,7 +1264,7 @@ impl Native {
                 select(self.h(INTEL_MODE), SECURE_MODE);
                 self.intel.mode = SECURE_MODE;
                 self.intel_mode_labels(SECURE_MODE);
-                let message = format!("Sesi aman selesai: {} observasi tersimpan · dihentikan {} · gagal {}.", result.saved, result.stopped, result.failed);
+                let message = format!("Sesi aman selesai: {} observasi tersimpan · {} koneksi ditolak · dihentikan {} · gagal {}.", result.saved, result.rejected, result.stopped, result.failed);
                 notice = Some(if result.failed { Notice::Warning(message) } else { Notice::Information(message) });
             }
             Ok(IntelReply::SecureLoaded(rows, attempts)) => {
@@ -1797,7 +1797,7 @@ impl Native {
                     self.start_intel(move || {
                         let result = ni::secure_bridge::poll_session(target, secret, &path, &worker_cancel)?;
                         Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
-                            ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?, result))
+                            ni::secure_monitor::attempts(&path)?, result))
                     })?;
                     self.intel.secure_cancel = Some(cancel);
                     self.set_notice("Polling SNMP berjalan; Stop sesi untuk membatalkan.");
@@ -1845,7 +1845,7 @@ impl Native {
                 ni::secure_bridge::available()?;
                 let Some(config) = typed_file_dialog(self.hwnd,false,"","Konfigurasi TLS JSON (*.json)\0*.json\0","json")? else { return Ok(()); };
                 let expected = ni::secure_bridge::TlsConfig::read(&config)?;
-                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: collector 5 menit (maks 128 koneksi). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
+                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: collector 30 menit (maks 1024 koneksi, 4 bersamaan). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
                 if choice != IDYES && choice != IDNO { return Ok(()); }
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
                 if choice == IDYES {
@@ -1854,7 +1854,7 @@ impl Native {
                     self.start_intel(move || {
                         let result = ni::secure_bridge::collect_tls(&expected,&path,&worker_cancel)?;
                         Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
-                            ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?, result))
+                            ni::secure_monitor::attempts(&path)?, result))
                     })?;
                     self.intel.secure_cancel = Some(cancel);
                     self.set_notice("Collector TLS berjalan; Stop sesi untuk membatalkan.");
@@ -1960,7 +1960,7 @@ impl Native {
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
                 self.start_intel(move || Ok(IntelReply::SecureLoaded(ni::secure_monitor::page(&path)?,
-                    ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?)))?;
+                    ni::secure_monitor::attempts(&path)?)))?;
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 let authority = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
@@ -2633,7 +2633,7 @@ impl Native {
                         format!("UTC {}",attempt.stamp)],
                         &|| format!("Durasi {} ms. Kegagalan tidak membuktikan sebab autentikasi tertentu.",attempt.elapsed_ms));
                 }
-                "Secure Transport · SNMP GET/polling 10 sampel; TLS satu sesi atau collector 5 menit. Stop sesi membatalkan pekerjaan. Histori lokal bukan status online. Helper harus terverifikasi."
+                "Secure Transport · SNMP GET/polling 10 sampel; TLS satu sesi atau collector 30 menit. Stop sesi membatalkan pekerjaan. Histori lokal bukan status online. Helper harus terverifikasi."
             }
             REPLAY_MODE => {
                 if let Some(report) = &self.intel.flow_replay {
