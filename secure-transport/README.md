@@ -42,3 +42,5 @@ The multi-connection collector emits complete authenticated frame batches (64 fr
 
 ### Confirmed certificate material
 Desktop captures exact SHA-256 of the server chain, private key file, CA and optional CRL before confirmation. Only public certificate-file digests are shown. The helper checks each exact byte buffer against that manifest before parsing; material changes require new confirmation, not silent trust rotation. Desktop IPC requires this manifest; direct standalone one-shot CLI remains compatible with explicit file configuration. The key-file digest is not written to history or logs. This does not replace protected directory ACLs or external certificate expiry/rotation management. Live native status displays committed batches and rejection counts without rereading SQLite on the UI thread.
+
+Streaming acceptance harness: `python tests/tls_streaming.py --exe <built executable> --report <new JSON>` uses two simultaneous loopback clients, checks a batch before EOF, checks sequence continuity and truncated-tail rejection, and rejects a mismatched CA material manifest before bind. Requires actual built helper and OpenSSL; not run in current sandbox.

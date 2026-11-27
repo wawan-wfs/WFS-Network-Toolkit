@@ -93,6 +93,14 @@ impl Page {
             Self::Review => "Tinjau perubahan",
         }
     }
+    fn workspace(self)->wfs_network_toolkit::ui_layout::Workspace {
+        use wfs_network_toolkit::ui_layout::Workspace;
+        match self {
+            Self::Home=>Workspace::Home, Self::Ip=>Workspace::Ip, Self::Mac=>Workspace::Mac,
+            Self::Backup=>Workspace::Backup, Self::Diag=>Workspace::Diag,
+            Self::Intel=>Workspace::Intel, Self::Review=>Workspace::Review,
+        }
+    }
     fn caption(self) -> &'static str {
         match self {
             Self::Home => "Periksa adaptor, konfigurasi IPv4, gateway, DNS, dan MAC aktif.",
@@ -107,6 +115,7 @@ impl Page {
 }
 thread_local! {
     static NAV_SELECTION: std::cell::Cell<Page> = const { std::cell::Cell::new(Page::Home) };
+    static ACTIVE_WORKSPACE: std::cell::Cell<Page> = const { std::cell::Cell::new(Page::Home) };
 }
 struct Widget {
     handle: HWND,
@@ -833,6 +842,8 @@ impl Native {
             } else {
                 item.rect
             };
+            let logical=item.page.map_or(logical,|page|
+                wfs_network_toolkit::ui_layout::adaptive_workspace_rect(page.workspace(),logical,rect.right*96/dpi as i32));
             let [x, y, width, height] =
                 control_rect(logical, rect.right, rect.bottom, dpi as i32);
             if item.id == INTEL_CHART {
@@ -891,6 +902,8 @@ impl Native {
     }
     fn show_page(&mut self, page: Page) {
         self.page = page;
+        ACTIVE_WORKSPACE.with(|s|s.set(page));
+        unsafe { InvalidateRect(self.hwnd,null(),1); }
         if page != Page::Review {
             NAV_SELECTION.with(|s| s.set(page));
         }
@@ -1720,6 +1733,19 @@ fn paint_background(h: HWND, dc: HDC) {
         },
         line(),
     );
+    if client.right>0 && client.bottom>0 {
+        let page=ACTIVE_WORKSPACE.with(std::cell::Cell::get);
+        let panels=wfs_network_toolkit::ui_layout::workspace_sections(page.workspace(),
+            client.right*96/dpi.max(1),client.bottom*96/dpi.max(1));
+        let border=(dpi/96).max(1);
+        for rect in panels {
+            let [x,y,w,h]=control_rect(rect,client.right,client.bottom,dpi);
+            let r=RECT{left:x,top:y,right:x+w,bottom:y+h};
+            let brush=unsafe{CreateSolidBrush(line())};
+            if !brush.is_null(){unsafe{FrameRect(dc,&r,brush);DeleteObject(brush);}}
+            fill(dc,&RECT{left:x,top:y,right:x+border*3,bottom:y+border*12},accent());
+        }
+    }
     let x = 228 * dpi / 96;
     let right = client.right - 28 * dpi / 96;
     let y = 178 * dpi / 96;

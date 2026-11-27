@@ -19,6 +19,87 @@ pub fn control_rect([x, y, w, h]: [i32; 4], width: i32, height: i32, scale: i32)
     [x, y, w, h].map(|v| (v * scale + 48) / 96)
 }
 
+/// Each native workspace has its own section layout. Rectangles use logical
+/// coordinates and stay inside the content area; no WebView or extra window.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum Workspace { Home, Ip, Mac, Backup, Diag, Intel, Review }
+pub fn adaptive_workspace_rect(page:Workspace,mut rect:[i32;4],width:i32)->[i32;4] {
+    if width<1000 {return rect;}
+    let col=((width-256-24)/2).clamp(210,440);
+    match page {
+        Workspace::Ip => {
+            if rect[0]==462 {
+                rect[0]=228+col+24;
+                if rect[2]==210 || rect[2]==205 || rect[2]==-490 {rect[2]=col;}
+            } else if rect[0]==228 && matches!(rect[2],210|205) {
+                rect[2]=col;
+            }
+        }
+        Workspace::Backup => {
+            if rect[0]==512 {
+                rect[0]=228+col+24;
+                if matches!(rect[2],235|245|260) {rect[2]=col;}
+            } else if rect[0]==228 && matches!(rect[2],235|245) {
+                rect[2]=col;
+            }
+        }
+        Workspace::Diag => {
+            let extra=((width-840)/3).clamp(0,120);
+            match rect[0] {
+                228 if matches!(rect[2],141|147) => rect[2]+=extra,
+                390 => {rect[0]+=extra;rect[2]+=extra;}
+                513|650 => rect[0]+=2*extra,
+                _=>{}
+            }
+        }
+        _=>{}
+    }
+    rect
+}
+pub fn workspace_sections(page:Workspace,width:i32,height:i32)->Vec<[i32;4]> {
+    let right=width-18;
+    let left=218;
+    let bottom=height-105;
+    let col=((width-256-24)/2).clamp(210,440);
+    let divider=if width>=1000 {228+col+12} else {500};
+    let mut out=Vec::new();
+    let mut section=|x,y,r,b| {
+        if x>=left && y>=181 && r<=right && b<=height-54 && r>x && b>y {
+            out.push([x,y,r-x,b-y]);
+        }
+    };
+    match page {
+        Workspace::Home => section(left,182,right,bottom),
+        Workspace::Ip => {
+            section(left,182,right,444);
+            section(left,450,right,501);
+        }
+        Workspace::Mac => {
+            section(left,182,right,284);
+            section(left,286,right,412);
+            section(left,414,right,468);
+        }
+        Workspace::Backup => {
+            section(left,182,divider-4,351);
+            section(divider+4,182,right,351);
+            section(left,359,right,495);
+        }
+        Workspace::Diag => {
+            section(left,182,right,255);
+            section(left,262,right,bottom);
+        }
+        Workspace::Intel => {
+            section(left,182,right,268);
+            section(left,270,right,height-128);
+        }
+        Workspace::Review => {
+            section(left,182,right,height-176);
+            section(left,height-175,right,height-98);
+        }
+    }
+    out
+}
+
 /// Reserve a native chart strip only when the logical client can retain
 /// a useful table. Compact windows keep the existing full-screen drilldown.
 pub fn dashboard_chart_rect(height: i32, scale: i32) -> Option<[i32; 4]> {
@@ -28,6 +109,30 @@ pub fn dashboard_chart_rect(height: i32, scale: i32) -> Option<[i32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn adaptive_workspaces_keep_sections_and_columns_inside_client() {
+        for width in [840,1000,1280,1920,2560] {
+            for height in [562,720,1080] {
+                for page in [Workspace::Home,Workspace::Ip,Workspace::Mac,Workspace::Backup,
+                    Workspace::Diag,Workspace::Intel,Workspace::Review] {
+                    let panels=workspace_sections(page,width,height);
+                    assert!(!panels.is_empty());
+                    for [x,y,w,h] in panels {assert!(x>=218 && y>=181 && w>0 && h>0 && x+w<=width-18 && y+h<=height-54);}
+                }
+                let [x,_,w,_]=adaptive_workspace_rect(Workspace::Ip,[228,214,210,31],width);
+                let [rx,_,rw,_]=adaptive_workspace_rect(Workspace::Ip,[462,214,210,31],width);
+                assert!(x+w<rx && rx+rw<=width-28);
+                let [x,_,w,_]=adaptive_workspace_rect(Workspace::Backup,[228,220,245,46],width);
+                let [rx,_,rw,_]=adaptive_workspace_rect(Workspace::Backup,[512,242,245,31],width);
+                assert!(x+w<rx && rx+rw<=width-28);
+                let [x,_,w,_]=adaptive_workspace_rect(Workspace::Diag,[228,214,147,31],width);
+                let [rx,_,rw,_]=adaptive_workspace_rect(Workspace::Diag,[390,214,108,31],width);
+                let [bx,_,bw,_]=adaptive_workspace_rect(Workspace::Diag,[513,212,125,36],width);
+                let [px,_,pw,_]=adaptive_workspace_rect(Workspace::Diag,[650,212,129,36],width);
+                assert!(x+w<rx && rx+rw<bx && bx+bw<px && px+pw<=width-28);
+            }
+        }
+    }
     #[test]
     fn actions_do_not_overlap_adapter_picker_at_supported_sizes() {
         for (w, h, dpi) in [

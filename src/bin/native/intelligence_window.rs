@@ -1650,7 +1650,7 @@ impl Native {
                 }
             }
             INTEL_RECORD | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SUBNET_MODE => {
-                let capture=self.selected_intel_row().and_then(|i|self.intel.visible_subnet_evidence.get(i))
+                let mut capture=self.selected_intel_row().and_then(|i|self.intel.visible_subnet_evidence.get(i))
                     .and_then(Option::as_ref).cloned().ok_or("Pilih subnet dengan scope terverifikasi.")?;
                 let save=id==INTEL_RECORD;
                 if save && (self.intel.recovery_view.is_some() || popup(self.hwnd,
@@ -1658,7 +1658,10 @@ impl Native {
                     MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION)!=IDYES) {return Ok(());}
                 let path=self.primary_archive_path()?.with_file_name("ipam-evidence-v1.sqlite3");
                 self.start_intel(move || {
-                    if save {ni::ipam_evidence::save(&path,&capture)?;}
+                    if save {
+                        capture.recorded_at=ni::now();
+                        ni::ipam_evidence::save(&path,&capture)?;
+                    }
                     let rows=ni::ipam_evidence::page(&path,&capture.scope,&capture.cidr,None)?;
                     Ok(IntelReply::IpamEvidence(capture.scope,capture.cidr,rows))
                 })?;
