@@ -648,6 +648,17 @@ impl Native {
         }
         Ok(())
     }
+    fn table_headers(&self, id: i32, headers: &[&str]) {
+        for (i, title) in headers.iter().enumerate() {
+            let mut text = w::wide(title);
+            let column = LVCOLUMNW {
+                mask: LVCF_TEXT,
+                pszText: text.as_mut_ptr(),
+                ..Default::default()
+            };
+            send_native(self.h(id), LVM_SETCOLUMNW, i, (&column as *const LVCOLUMNW) as isize);
+        }
+    }
     fn table_rows(&self, id: i32, rows: &[Vec<String>], column_count: usize) {
         let h = self.h(id);
         let redraw = unsafe { IsWindowVisible(h) } != 0;
@@ -2044,6 +2055,14 @@ fn start_ui(smoke: bool) -> Result<()> {
                         isize::from(ui.model.work.is_some() || ui.intel.work.is_some()),
                     );
                 }
+            }
+            (true, WM_CLOSE, _) if ui.intel.secure_cancel.is_some() => {
+                if let Some(cancel) = &ui.intel.secure_cancel { cancel.stop(); }
+                ui.set_notice("Menghentikan sesi aman sebelum keluar. Tutup kembali setelah selesai.");
+            }
+            (_, WM_KEYDOWN, p) if p == 0x1b && ui.intel.secure_cancel.is_some() => {
+                if let Some(cancel) = &ui.intel.secure_cancel { cancel.stop(); }
+                ui.set_notice("Menghentikan sesi aman…");
             }
             (_, WM_KEYDOWN, p) if p == 0x1b && ui.page == Page::Review => {
                 if let Err(e) = ui.action(CANCEL, 0) {

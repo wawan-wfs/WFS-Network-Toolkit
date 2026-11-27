@@ -118,6 +118,7 @@ enum IntelReply {
     Syslog(ni::syslog::Summary),
     FlowReplay(ni::flow_replay::Report),
     SecureHistory(Vec<ni::secure_monitor::Report>),
+    SecureLoaded(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>),
     SecureSession(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>, ni::secure_bridge::SessionResult),
     IpamPivot(Vec<ni::ipam_notes::Note>, String, String),
     Archive(store::Page, Box<Query>),
@@ -1133,9 +1134,9 @@ impl Native {
         if mode == SECURE_MODE {
             set(self.h(INTEL_ROUTER), "SNMPv3 GET");
             set(self.h(INTEL_IMPORT), "TLS Syslog");
-            set(self.h(INTEL_RECORD), "Polling SNMP");
+            set(self.h(INTEL_RECORD), "Polling");
             set(self.h(INTEL_PROBE), "Stop sesi");
-            set(self.h(INTEL_HISTORY), "Histori aman");
+            set(self.h(INTEL_HISTORY), "Histori");
         }
         if mode == DHCP6_MODE || mode == DHCP6_HISTORY_MODE {
             set(self.h(INTEL_RECORD), "Simpan DHCPv6");
@@ -1265,6 +1266,11 @@ impl Native {
                 self.intel_mode_labels(SECURE_MODE);
                 let message = format!("Sesi aman selesai: {} observasi tersimpan · dihentikan {} · gagal {}.", result.saved, result.stopped, result.failed);
                 notice = Some(if result.failed { Notice::Warning(message) } else { Notice::Information(message) });
+            }
+            Ok(IntelReply::SecureLoaded(rows, attempts)) => {
+                self.intel.secure_history = rows;
+                self.intel.secure_attempts = attempts;
+                self.set_notice("Histori Secure Transport dimuat dari database lokal.");
             }
             Ok(IntelReply::SecureHistory(rows)) => {
                 self.intel.secure_history = rows;
@@ -1953,9 +1959,8 @@ impl Native {
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == SECURE_MODE => {
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
-                self.start_intel(move || Ok(IntelReply::SecureSession(ni::secure_monitor::page(&path)?,
-                    ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?,
-                    ni::secure_bridge::SessionResult::default())))?;
+                self.start_intel(move || Ok(IntelReply::SecureLoaded(ni::secure_monitor::page(&path)?,
+                    ni::secure_attempt::page(&path.with_file_name("secure-attempts-v1.sqlite3"))?)))?;
             }
             INTEL_HISTORY if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 let authority = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
@@ -3998,6 +4003,16 @@ impl Native {
             .iter()
             .map(|r| r[0].split('/').next().and_then(|s| s.parse().ok()))
             .collect();
+        // Mode-specific column names make the same native table usable as
+        // an evidence workspace without changing existing row semantics.
+        let headers = match mode {
+            SECURE_MODE => ["Transport", "Target / identitas", "Hasil", "Waktu UTC"],
+            REPLAY_MODE => ["Metrik", "Sumber", "Jumlah", "Keterangan"],
+            SUBNET_MODE => ["Prefix", "Scope", "Observasi", "Cakupan"],
+            DHCP6_HISTORY_MODE => ["Snapshot", "Identitas", "Bukti", "Status"],
+            _ => ["Objek", "Sumber / scope", "Bukti", "Status"],
+        };
+        self.table_headers(INTEL_TABLE, &headers);
         self.table_rows(INTEL_TABLE, &visible, 4);
         self.intel.details = details;
         self.intel.dashboard_targets = dashboard_targets;

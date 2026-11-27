@@ -19,6 +19,8 @@ use std::{
 pub const MAX_ROWS: usize = 10_000;
 const TEMPLATE_TTL: u64 = 1_800;
 const MAX_TEMPLATES: usize = 512;
+const OPTIONS_TTL: u64 = 60;
+const MAX_SELECTOR_OPTIONS: usize = 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Flow {
@@ -49,6 +51,8 @@ pub struct Provenance {
     pub selector_id: Option<u64>,
     pub selector_algorithm: Option<u16>,
     pub sampling_from_options: bool,
+    pub sampling_options_observed_utc: Option<u64>,
+    pub sampling_options_cached: bool,
     pub sampling_interval_legacy: Option<u32>,
     pub sampling_algorithm_legacy: Option<u8>,
     pub sampling_packet_interval: Option<u32>,
@@ -90,8 +94,9 @@ impl Provenance {
     }
     pub fn summary(&self) -> String {
         format!(
-            "Selector {:?}, algorithm {:?}, opsi {}. Sampling legacy interval {:?}, algorithm {:?}; packet interval {:?}, space {:?}. NAT post-observation v4 {:?} → {:?}, v6 {:?} → {:?}, port {:?} → {:?}. Hanya field terlapor; tidak mengalikan counter.",
+            "Selector {:?}, algorithm {:?}, opsi {} (UTC {:?}, cache {}). Sampling legacy interval {:?}, algorithm {:?}; packet interval {:?}, space {:?}. NAT post-observation v4 {:?} → {:?}, v6 {:?} → {:?}, port {:?} → {:?}. Hanya field terlapor; tidak mengalikan counter.",
             self.selector_id, self.selector_algorithm, self.sampling_from_options,
+            self.sampling_options_observed_utc, self.sampling_options_cached,
             self.sampling_interval_legacy, self.sampling_algorithm_legacy,
             self.sampling_packet_interval, self.sampling_packet_space,
             self.post_source_v4, self.post_destination_v4, self.post_source_v6,
@@ -201,6 +206,7 @@ pub struct Decoder {
     recent: VecDeque<(Session, [u8; 32])>,
     v9_clock: HashMap<Session, (u32, u32)>,
     sequence_clock: HashMap<Session, (u32, u32)>,
+    selector_cache: HashMap<(Session, u64), (u64, u32, Provenance)>,
 }
 #[derive(Default)]
 pub struct Batch {
@@ -509,19 +515,58 @@ impl Decoder {
                 batch.skipped += 1;
             } // Unsupported sets are counted, not interpreted.
         }
-        // Same-datagram correlation only; no stale sampling state across
-        // datagrams, and explicit per-record sampling always wins.
+        // Cross-datagram association requires the exact exporter/version/domain,
+        // strictly forward sequence, monotonic export time and fresh receive
+        // evidence. Any new template or options refresh suppresses old cache
+        // for this session; never guess which selector an ambiguous update affects.
+        let forward = self.sequence_clock.get(&session).is_some_and(|&(old_export, old_seq)| {
+            let delta = sequence.wrapping_sub(old_seq);
+            exported >= old_export && delta > 0 && delta < (1 << 31)
+        });
+        let cache_allowed = version == 10 && forward && !restart
+            && staged.is_empty() && batch.options_records == 0;
         for flow in &mut batch.flows {
             if let Some(p) = flow.provenance.as_mut()
                 && !p.has_sampling()
-                && let Some(Some(options)) = p.selector_id.and_then(|id| selector_options.get(&id))
+                && let Some(selector) = p.selector_id
             {
-                p.selector_algorithm = options.selector_algorithm;
-                p.sampling_interval_legacy = options.sampling_interval_legacy;
-                p.sampling_algorithm_legacy = options.sampling_algorithm_legacy;
-                p.sampling_packet_interval = options.sampling_packet_interval;
-                p.sampling_packet_space = options.sampling_packet_space;
-                p.sampling_from_options = true;
+                let resolved = match selector_options.get(&selector) {
+                    Some(Some(options)) => Some((stamp, false, options)),
+                    Some(None) => None,
+                    None if cache_allowed => self.selector_cache.get(&(session, selector))
+                        .filter(|(received, export, _)| stamp >= *received && stamp - *received <= OPTIONS_TTL
+                            && exported >= *export && u64::from(exported - *export) <= OPTIONS_TTL)
+                        .map(|(received, _, options)| (*received, true, options)),
+                    None => None,
+                };
+                if let Some((observed, cached, options)) = resolved {
+                    p.selector_algorithm = options.selector_algorithm;
+                    p.sampling_interval_legacy = options.sampling_interval_legacy;
+                    p.sampling_algorithm_legacy = options.sampling_algorithm_legacy;
+                    p.sampling_packet_interval = options.sampling_packet_interval;
+                    p.sampling_packet_space = options.sampling_packet_space;
+                    p.sampling_from_options = true;
+                    p.sampling_options_observed_utc = Some(observed);
+                    p.sampling_options_cached = cached;
+                }
+            }
+        }
+        // Commit only after full packet validation. Invalidate on ambiguous
+        // updates, template changes, repeated/backwards sequence and clock rollback.
+        self.selector_cache.retain(|(s, _), (received, _, _)| {
+            stamp >= *received && stamp - *received <= OPTIONS_TTL
+                && (*s != session || cache_allowed)
+        });
+        let admit = version == 10 && !restart
+            && (forward || !self.sequence_clock.contains_key(&session));
+        if admit && selector_options.len() <= MAX_SELECTOR_OPTIONS {
+            if self.selector_cache.len().saturating_add(selector_options.len()) > MAX_SELECTOR_OPTIONS {
+                self.selector_cache.clear();
+            }
+            for (selector, options) in selector_options {
+                if let Some(options) = options {
+                    self.selector_cache.insert((session, selector), (stamp, exported, options));
+                }
             }
         }
         // Commit diagnostic state only after successful decoding. Same sequence
@@ -1331,7 +1376,7 @@ mod tests {
         }
     }
     #[test]
-    fn options_selector_is_exact_and_local_to_datagram() {
+    fn options_selector_is_exact_fresh_and_session_isolated() {
         let exp = "127.0.0.1:55000".parse().unwrap();
         let mut d = Decoder::default();
         let mut opt = vec![];
@@ -1353,11 +1398,27 @@ mod tests {
         assert!(b.flows[0].provenance.as_ref().unwrap().sampling_from_options);
         assert_eq!(b.flows[0].provenance.as_ref().unwrap().sampling_packet_space, Some(98));
         let b = d.ingest(exp, &packet(10, 11, 2, 101, 0, &[set(256, &data)]), 101).unwrap();
+        let cached = b.flows[0].provenance.as_ref().unwrap();
+        assert!(cached.sampling_options_cached);
+        assert_eq!(cached.sampling_options_observed_utc, Some(100));
+        assert_eq!(cached.sampling_packet_space, Some(98));
+        let other = "127.0.0.1:55001".parse().unwrap();
+        let b = d.ingest(other, &packet(10, 11, 2, 101, 0, &[set(2, &tpl), set(256, &data)]), 101).unwrap();
         assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
         let mut conflict = options_data.clone();
         conflict[15] = 99;
         let sets = [set(257, &options_data), set(257, &conflict), set(256, &data)];
         let b = d.ingest(exp, &packet(10, 11, 3, 102, 0, &sets), 102).unwrap();
+        assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
+        let b = d.ingest(exp, &packet(10, 11, 4, 103, 0, &[set(256, &data)]), 103).unwrap();
+        assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
+        d.ingest(exp, &packet(10, 11, 5, 104, 0, &[set(257, &options_data)]), 104).unwrap();
+        let b = d.ingest(exp, &packet(10, 11, 6, 165, 0, &[set(256, &data)]), 165).unwrap();
+        assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
+        d.ingest(exp, &packet(10, 11, 7, 166, 0, &[set(257, &options_data)]), 166).unwrap();
+        let b = d.ingest(exp, &packet(10, 11, 6, 165, 0, &[set(256, &data),set(257,&options_data)]), 167).unwrap();
+        assert!(b.sequence_reordered);
+        let b = d.ingest(exp, &packet(10, 11, 8, 168, 0, &[set(256, &data)]), 168).unwrap();
         assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
     }
 
