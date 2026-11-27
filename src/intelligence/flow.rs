@@ -65,6 +65,14 @@ pub struct Provenance {
     pub post_destination_port: Option<u16>,
 }
 impl Provenance {
+    // A fixed bitset avoids a per-record allocation for duplicate detection.
+    fn field_bit(id: u16) -> u16 {
+        match id {
+            34=>1,35=>2,302=>4,304=>8,305=>16,306=>32,
+            225=>64,226=>128,227=>256,228=>512,281=>1024,282=>2048,
+            _=>0,
+        }
+    }
     fn read_field(&mut self, id: u16, v: &[u8]) {
         let number = || integer(v).and_then(|n| u32::try_from(n).ok());
         match id {
@@ -273,6 +281,7 @@ impl Decoder {
         let mut staged: HashMap<Key, Template> = HashMap::new();
         let mut batch = Batch::default();
         let mut selector_options: BTreeMap<u64, Option<Provenance>> = BTreeMap::new();
+        let mut options_ambiguous = false;
         let mut set_count = 0_u32;
         while !packet.is_empty() {
             set_count += 1;
@@ -382,7 +391,7 @@ impl Decoder {
                         }
                         batch.options_records += 1;
                         let mut metadata = Provenance::default();
-                        let mut seen = std::collections::BTreeSet::new();
+                        let mut seen = 0u16;
                         let mut unique = true;
                         for field in &tpl.fields {
                             let len = if field.length == u16::MAX {
@@ -391,19 +400,25 @@ impl Decoder {
                             } else { usize::from(field.length) };
                             let v = take(&mut set, len)?;
                             if !field.enterprise && matches!(field.id, 302 | 304 | 305 | 306 | 34 | 35) {
-                                unique &= seen.insert(field.id);
+                                let bit = Provenance::field_bit(field.id);
+                                unique &= seen & bit == 0;
+                                seen |= bit;
                                 metadata.read_field(field.id, v);
                             }
                         }
-                        if eligible && unique && metadata.has_sampling()
-                            && let Some(selector) = metadata.selector_id
-                        {
-                            selector_options.entry(selector)
-                                .and_modify(|existing| {
-                                    if existing.as_ref() != Some(&metadata) {
-                                        *existing = None;
-                                    }
-                                }).or_insert(Some(metadata));
+                        if eligible {
+                            if !unique || !metadata.has_sampling() || metadata.selector_id.is_none() {
+                                options_ambiguous = true;
+                            } else if let Some(selector) = metadata.selector_id {
+                                if selector_options.len() >= MAX_SELECTOR_OPTIONS && !selector_options.contains_key(&selector) {
+                                    options_ambiguous = true;
+                                } else {
+                                    selector_options.entry(selector)
+                                        .and_modify(|existing| {
+                                            if existing.as_ref() != Some(&metadata) { *existing = None; }
+                                        }).or_insert(Some(metadata));
+                                }
+                            }
                         }
                     }
                     continue;
@@ -421,6 +436,8 @@ impl Decoder {
                         return Err("Batas baris per datagram tercapai.".into());
                     }
                     let mut provenance = Provenance::default();
+                    let mut provenance_bits = 0u16;
+                    let mut provenance_ambiguous = false;
                     let mut v4 = (None, None);
                     let mut v6 = (None, None);
                     let (
@@ -448,6 +465,9 @@ impl Decoder {
                             continue;
                         }
                         if version == 10 {
+                            let bit = Provenance::field_bit(f.id);
+                            provenance_ambiguous |= provenance_bits & bit != 0;
+                            provenance_bits |= bit;
                             provenance.read_field(f.id, v);
                         }
                         match f.id {
@@ -504,7 +524,7 @@ impl Decoder {
                             packets,
                             datagram_hash: digest,
                             ordinal: (set_count << 16) | record,
-                            provenance: (provenance.has_sampling() || provenance.has_nat() || provenance.selector_id.is_some()).then_some(provenance),
+                            provenance: (!provenance_ambiguous && (provenance.has_sampling() || provenance.has_nat() || provenance.selector_id.is_some())).then_some(provenance),
                         });
                     } else {
                         batch.skipped += 1;
@@ -524,7 +544,8 @@ impl Decoder {
             exported >= old_export && delta > 0 && delta < (1 << 31)
         });
         let cache_allowed = version == 10 && forward && !restart
-            && staged.is_empty() && batch.options_records == 0;
+            && staged.is_empty() && batch.options_records == 0 && batch.missing == 0;
+        if options_ambiguous { selector_options.clear(); }
         for flow in &mut batch.flows {
             if let Some(p) = flow.provenance.as_mut()
                 && !p.has_sampling()
@@ -574,6 +595,8 @@ impl Decoder {
         batch.generation_restart = restart;
         if self.sequence_clock.len() >= 512 && !self.sequence_clock.contains_key(&session) {
             self.sequence_clock.clear();
+            // Association cannot outlive the sequence epoch that justified it.
+            self.selector_cache.clear();
         }
         if let Some(&(old_export, old_sequence)) = self.sequence_clock.get(&session) {
             if !restart {
@@ -1422,6 +1445,20 @@ mod tests {
         assert!(!b.flows[0].provenance.as_ref().unwrap().has_sampling());
     }
 
+    #[test]
+    fn duplicate_metadata_never_produces_selector_or_nat_provenance() {
+        let exp="127.0.0.1:55000".parse().unwrap();
+        let mut d=Decoder::default();
+        let mut tpl=vec![];
+        for n in [256u16,5,8,4,12,4,302,8,302,8,225,4] { tpl.extend(n.to_be_bytes()); }
+        let mut data=vec![192,0,2,1,203,0,113,2];
+        data.extend(9u64.to_be_bytes());
+        data.extend(10u64.to_be_bytes());
+        data.extend([198,51,100,1]);
+        let b=d.ingest(exp,&packet(10,11,1,100,0,&[set(2,&tpl),set(256,&data)]),100).unwrap();
+        assert_eq!(b.flows.len(),1);
+        assert!(b.flows[0].provenance.is_none());
+    }
     #[test]
     fn ipfix_provenance_is_record_local_and_does_not_scale_counters() {
         let exp = "127.0.0.1:55000".parse().unwrap();

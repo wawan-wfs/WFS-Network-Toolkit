@@ -648,6 +648,12 @@ impl Native {
         }
         Ok(())
     }
+    fn restore_table_selection(&self,id:i32,index:usize) {
+        let item=LVITEMW { stateMask:LVIS_SELECTED | LVIS_FOCUSED,
+            state:LVIS_SELECTED | LVIS_FOCUSED,..Default::default() };
+        send_native(self.h(id),LVM_SETITEMSTATE,index,(&item as *const LVITEMW) as isize);
+        send_native(self.h(id),LVM_ENSUREVISIBLE,index,0);
+    }
     fn table_headers(&self, id: i32, headers: &[&str]) {
         for (i, title) in headers.iter().enumerate() {
             let mut text = w::wide(title);

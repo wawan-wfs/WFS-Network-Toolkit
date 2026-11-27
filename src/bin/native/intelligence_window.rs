@@ -186,6 +186,8 @@ struct IntelState {
     visible_subnet_keys: Vec<Option<(String, String)>>,
     ipam_pivot_draft: Option<(String, String, i64)>,
     ipam_history: Option<(String, String, Vec<ni::ipam_notes::Note>)>,
+    rendered_mode: Option<usize>,
+    rendered_rows: Vec<Vec<String>>,
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
     flow_replay: Option<ni::flow_replay::Report>,
@@ -2287,6 +2289,9 @@ impl Native {
 
     fn render_intel(&mut self) {
         let mode = selection(self.h(INTEL_MODE));
+        let old_selection = if self.intel.rendered_mode == Some(mode) {
+            self.selected_intel_row().and_then(|i|self.intel.rendered_rows.get(i)).cloned()
+        } else { None };
         let mut visible = Vec::new();
         let mut details = Vec::new();
         let mut matched = 0usize;
@@ -4074,14 +4079,27 @@ impl Native {
             DHCP6_HISTORY_MODE => ["Snapshot", "Identitas", "Bukti", "Status"],
             _ => ["Objek", "Sumber / scope", "Bukti", "Status"],
         };
-        self.table_headers(INTEL_TABLE, &headers);
-        self.table_rows(INTEL_TABLE, &visible, 4);
+        if self.intel.rendered_mode != Some(mode) {
+            self.table_headers(INTEL_TABLE, &headers);
+        }
+        if self.intel.rendered_mode != Some(mode) || self.intel.rendered_rows != visible {
+            self.table_rows(INTEL_TABLE, &visible, 4);
+            if let Some(old) = old_selection {
+                let mut matches = visible.iter().enumerate().filter(|(_,row)|*row==&old);
+                if let Some((index,_))=matches.next() && matches.next().is_none() {
+                    self.restore_table_selection(INTEL_TABLE,index);
+                }
+            }
+            self.intel.rendered_rows=visible.clone();
+            self.intel.rendered_mode=Some(mode);
+        }
         self.intel.details = details;
         self.intel.dashboard_targets = dashboard_targets;
         DASHBOARD_CHART_CACHE.with(|cache| {
             *cache.borrow_mut() = dashboard_charts.clone();
         });
         self.intel.dashboard_charts = dashboard_charts;
+        unsafe { InvalidateRect(self.h(INTEL_CHART),null(),0); }
         self.layout();
         self.intel.visual_edges = visual_edges;
         self.intel.visual_series = visual_series;
