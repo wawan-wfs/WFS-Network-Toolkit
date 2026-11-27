@@ -55,7 +55,8 @@ const DHCP6_HISTORY_MODE: usize = 29;
 const SYSLOG_MODE: usize = 30;
 const REPLAY_MODE: usize = 31;
 const SECURE_MODE: usize = 32;
-const INTEL_MODES: [&str; 33] = [
+const IPAM_HISTORY_MODE: usize = 33;
+const INTEL_MODES: [&str; 34] = [
     "Akses Internet",
     "Perangkat & alamat",
     "Endpoint Windows",
@@ -89,6 +90,7 @@ const INTEL_MODES: [&str; 33] = [
     "Syslog offline",
     "Replay Flow offline",
     "Secure Transport",
+    "Histori revisi IPAM",
 ];
 const INTEL_ROW_LIMIT: usize = 1_000;
 
@@ -121,6 +123,7 @@ enum IntelReply {
     SecureLoaded(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>),
     SecureSession(Vec<ni::secure_monitor::Report>, Vec<ni::secure_attempt::Attempt>, ni::secure_bridge::SessionResult),
     IpamPivot(Vec<ni::ipam_notes::Note>, String, String),
+    IpamHistory(String, String, Vec<ni::ipam_notes::Note>),
     Archive(store::Page, Box<Query>),
     Device(Inspection, Box<Query>, String),
     Storage(Option<Box<store::ArchiveHealth>>),
@@ -182,6 +185,7 @@ struct IntelState {
     visible_notes: Vec<ni::ipam_notes::Note>,
     visible_subnet_keys: Vec<Option<(String, String)>>,
     ipam_pivot_draft: Option<(String, String, i64)>,
+    ipam_history: Option<(String, String, Vec<ni::ipam_notes::Note>)>,
     dhcp6_history: Option<(String, Vec<ni::dhcp6_history::Capture>)>,
     syslog_summary: Option<ni::syslog::Summary>,
     flow_replay: Option<ni::flow_replay::Report>,
@@ -1151,6 +1155,12 @@ impl Native {
             set(self.h(INTEL_EXPORT), "Ekspor/backup");
             set(self.h(INTEL_RECORD), "Simpan metadata");
             set(self.h(INTEL_HISTORY), "Undo metadata");
+            set(self.h(INTEL_PROBE), "Revisi IPAM");
+        }
+        if mode == IPAM_HISTORY_MODE {
+            set(self.h(INTEL_SEARCH), "Cari");
+            set(self.h(INTEL_MORE), "Lebih lama");
+            set(self.h(INTEL_HISTORY), "Terbaru");
         }
         if mode == POLL_MODE {
             set(self.h(INTEL_ROUTER), "Mulai polling");
@@ -1298,6 +1308,14 @@ impl Native {
                 select(self.h(INTEL_MODE), DHCP6_HISTORY_MODE);
                 self.intel.mode = DHCP6_HISTORY_MODE;
                 self.intel_mode_labels(DHCP6_HISTORY_MODE);
+            }
+            Ok(IntelReply::IpamHistory(scope,cidr,rows)) => {
+                self.intel.ipam_history=Some((scope,cidr,rows));
+                self.intel.filter.clear();
+                select(self.h(INTEL_MODE),IPAM_HISTORY_MODE);
+                self.intel.mode=IPAM_HISTORY_MODE;
+                set(self.h(INTEL_FILTER),"");
+                self.intel_mode_labels(IPAM_HISTORY_MODE);
             }
             Ok(IntelReply::IpamPivot(rows, scope, cidr)) => {
                 let note = rows.iter().find(|n| n.scope == scope && n.cidr == cidr);
@@ -1601,6 +1619,16 @@ impl Native {
                     }
                 }
             }
+            INTEL_MORE | INTEL_HISTORY if selection(self.h(INTEL_MODE)) == IPAM_HISTORY_MODE => {
+                let (scope,cidr,rows)=self.intel.ipam_history.as_ref().ok_or("Pilih metadata dari modul IPAM terlebih dahulu.")?;
+                let before=if id==INTEL_MORE {Some(rows.last().ok_or("Tidak ada revisi lebih lama.")?.revision)} else {None};
+                let (scope,cidr)=(scope.clone(),cidr.clone());
+                let path=self.notes_path()?;
+                self.start_intel(move || {
+                    let rows=ni::ipam_notes::history(&path,&scope,&cidr,before)?;
+                    Ok(IntelReply::IpamHistory(scope,cidr,rows))
+                })?;
+            }
             INTEL_MORE if selection(self.h(INTEL_MODE)) == DASHBOARD_MODE => {
                 let span = DASHBOARD_SPAN.with(|value| {
                     let next = match value.get() { 30 => 60, 60 => 120, _ => 30 };
@@ -1718,7 +1746,15 @@ impl Native {
             }
             INTEL_BACK => {
                 let mode = selection(self.h(INTEL_MODE));
-                if mode == ARCHIVE_MODE && self.intel.pivot_scope.take().is_some() {
+                if mode == IPAM_HISTORY_MODE {
+                    select(self.h(INTEL_MODE),NOTES_MODE);
+                    self.intel.mode=NOTES_MODE;
+                    self.intel.filter.clear();
+                    set(self.h(INTEL_FILTER),"");
+                    self.intel_mode_labels(NOTES_MODE);
+                    self.load_notes()?;
+                    return Ok(());
+                } else if mode == ARCHIVE_MODE && self.intel.pivot_scope.take().is_some() {
                     select(self.h(INTEL_MODE), DEVICE_MODE);
                     set(self.h(INTEL_FILTER), &self.intel.device_input);
                     self.intel.mode = DEVICE_MODE;
@@ -1735,6 +1771,16 @@ impl Native {
             }
             INTEL_REFRESH => {
                 self.start_intel(|| Ok(IntelReply::Local(Box::new(nw::local_snapshot()))))?
+            }
+            INTEL_PROBE if selection(self.h(INTEL_MODE)) == NOTES_MODE => {
+                let note=self.selected_intel_row().and_then(|i|self.intel.visible_notes.get(i))
+                    .ok_or("Pilih metadata IPAM terlebih dahulu.")?;
+                let (scope,cidr)=(note.scope.clone(),note.cidr.clone());
+                let path=self.notes_path()?;
+                self.start_intel(move || {
+                    let rows=ni::ipam_notes::history(&path,&scope,&cidr,None)?;
+                    Ok(IntelReply::IpamHistory(scope,cidr,rows))
+                })?;
             }
             INTEL_PROBE if selection(self.h(INTEL_MODE)) == POLL_MODE => {
                 let key = Authority::parse(&get(self.h(INTEL_HOST)))?.display();
@@ -1845,7 +1891,7 @@ impl Native {
                 ni::secure_bridge::available()?;
                 let Some(config) = typed_file_dialog(self.hwnd,false,"","Konfigurasi TLS JSON (*.json)\0*.json\0","json")? else { return Ok(()); };
                 let expected = ni::secure_bridge::TlsConfig::read(&config)?;
-                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: collector 30 menit (maks 1024 koneksi, 4 bersamaan). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan.",expected.bind,expected.allowed_client_sha256.len()),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
+                let choice = popup(self.hwnd,&format!("Mutual TLS pada {} · {} pin klien. Ya: collector 30 menit (maks 1024 koneksi, 4 bersamaan). Tidak: satu sesi. Batal: tidak membuka listener. Hanya ringkasan tersimpan. CRL: {}.",expected.bind,expected.allowed_client_sha256.len(),if expected.client_crl.is_some(){"aktif (strict)"}else{"tidak dikonfigurasi"}),MB_YESNOCANCEL | MB_DEFBUTTON3 | MB_ICONWARNING);
                 if choice != IDYES && choice != IDNO { return Ok(()); }
                 let path = self.primary_archive_path()?.with_file_name("secure-observations-v1.sqlite3");
                 if choice == IDYES {
@@ -2621,6 +2667,17 @@ impl Native {
                     );
                 }
                 "Metadata lokal. Format scope|CIDR|label/reserved|alias|tag|catatan. Simpan menampilkan overlap snapshot scope yang sama. Isi editor, Undo, backup dan Pulihkan salinan baru. Reset sebelum membuat key baru."
+            }
+            IPAM_HISTORY_MODE => {
+                if let Some((scope,cidr,rows))=&self.intel.ipam_history {
+                    for n in rows {
+                        push([format!("Revisi {}",n.revision),format!("{scope} / {cidr}"),
+                            if !n.active {"Dibatalkan".into()} else if n.reserved {"Reservasi operator".into()} else {"Label operator".into()},
+                            format!("UTC {}",n.recorded)],
+                            &||format!("{}\nAlias: {}\nTag: {}\nCatatan: {}\nMetadata historis, bukan bukti assignment.",n.editor(),n.alias,n.tags,n.note));
+                    }
+                }
+                "Histori IPAM read-only · pilih Revisi IPAM dari metadata, Terbaru atau Lebih lama. Kembali untuk mengedit metadata aktif."
             }
             SECURE_MODE => {
                 for report in &self.intel.secure_history {
@@ -3948,7 +4005,7 @@ impl Native {
         unsafe {
             ShowWindow(
                 self.h(INTEL_MORE),
-                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE | DASHBOARD_MODE) {
+                if self.page == Page::Intel && matches!(mode, ARCHIVE_MODE | DHCP6_HISTORY_MODE | DASHBOARD_MODE | IPAM_HISTORY_MODE) {
                     SW_SHOW
                 } else {
                     SW_HIDE
@@ -3965,7 +4022,7 @@ impl Native {
             ),
             (
                 INTEL_BACK,
-                mode == ARCHIVE_MODE && self.intel.pivot_scope.is_some()
+                mode == IPAM_HISTORY_MODE || mode == ARCHIVE_MODE && self.intel.pivot_scope.is_some()
                     || mode == DEVICE_MODE && self.intel.previous_mode.is_some(),
             ),
         ] {
@@ -3986,7 +4043,11 @@ impl Native {
             (INTEL_FLOW, mode != STORAGE_MODE && mode != SECURE_MODE),
             (INTEL_HISTORY, mode != STORAGE_MODE),
             (INTEL_REDACT, mode != STORAGE_MODE && mode != SECURE_MODE),
-            (INTEL_PROBE, true),
+            (INTEL_PROBE, mode != IPAM_HISTORY_MODE),
+            (INTEL_ROUTER, mode != IPAM_HISTORY_MODE),
+            (INTEL_IMPORT, mode != IPAM_HISTORY_MODE),
+            (INTEL_RECORD, mode != IPAM_HISTORY_MODE),
+            (INTEL_EXPORT, mode != IPAM_HISTORY_MODE),
         ] {
             unsafe {
                 ShowWindow(
@@ -4007,6 +4068,7 @@ impl Native {
         // an evidence workspace without changing existing row semantics.
         let headers = match mode {
             SECURE_MODE => ["Transport", "Target / identitas", "Hasil", "Waktu UTC"],
+            IPAM_HISTORY_MODE => ["Revisi", "Scope / prefix", "Status metadata", "Waktu UTC"],
             REPLAY_MODE => ["Metrik", "Sumber", "Jumlah", "Keterangan"],
             SUBNET_MODE => ["Prefix", "Scope", "Observasi", "Cakupan"],
             DHCP6_HISTORY_MODE => ["Snapshot", "Identitas", "Bukti", "Status"],

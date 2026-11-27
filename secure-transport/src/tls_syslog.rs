@@ -14,6 +14,8 @@ struct Config {
     server_key: PathBuf,
     client_ca: PathBuf,
     allowed_client_sha256: Vec<String>,
+    #[serde(default)]
+    client_crl: Option<PathBuf>,
 }
 fn bounded_file(path: &Path, cap: usize) -> Result<Vec<u8>> {
     let file = File::open(path).map_err(|_| "File konfigurasi/sertifikat tidak dapat dibuka.")?;
@@ -71,8 +73,18 @@ fn server(config: &Config) -> Result<Arc<ServerConfig>> {
         roots.add(cert).map_err(|_| "CA klien tidak valid.")?;
     }
     // Mandatory client certificate validation. No custom verifier or trust bypass.
-    let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-        .build().map_err(|_| "Client verifier gagal.")?;
+    let mut verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone());
+    if let Some(path) = &config.client_crl {
+        let bytes = bounded_file(path, 1024 * 1024)?;
+        let lists = rustls_pemfile::crls(&mut Cursor::new(bytes)).collect::<io::Result<Vec<_>>>()
+            .map_err(|_| "PEM CRL tidak valid.")?;
+        if !(1..=16).contains(&lists.len()) {
+            return Err("CRL wajib berisi 1–16 daftar valid.".into());
+        }
+        // Unknown revocation status remains denied; enforce nextUpdate too.
+        verifier = verifier.with_crls(lists).enforce_revocation_expiration();
+    }
+    let verifier = verifier.build().map_err(|_| "Client verifier gagal.")?;
     let mut server = ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|_| "Versi TLS tidak tersedia.")?

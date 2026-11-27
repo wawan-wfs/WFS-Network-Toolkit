@@ -1068,6 +1068,7 @@ impl Native {
                         && match selection(self.h(INTEL_MODE)) {
                             ARCHIVE_MODE => self.intel.archived.as_ref().is_some_and(|p| p.next.is_some()),
                             DASHBOARD_MODE => !self.intel.dashboard_charts.is_empty(),
+                            IPAM_HISTORY_MODE => self.intel.ipam_history.as_ref().is_some_and(|(_,_,rows)| rows.len()==25 && rows.last().is_some_and(|n|n.revision>1)),
                             DHCP6_HISTORY_MODE => self.intel.dhcp6_history.as_ref()
                                 .is_some_and(|(_, rows)| rows.len() == 20),
                             _ => false,

@@ -110,6 +110,8 @@ pub struct TlsConfig {
     pub server_key: PathBuf,
     pub client_ca: PathBuf,
     pub allowed_client_sha256: Vec<String>,
+    #[serde(default)]
+    pub client_crl: Option<PathBuf>,
 }
 impl TlsConfig {
     pub fn read(path: &Path) -> Result<Self> {
@@ -122,7 +124,8 @@ impl TlsConfig {
         if !valid_address(c.bind) || !(1..=32).contains(&c.allowed_client_sha256.len())
             || c.allowed_client_sha256.iter().any(|p| !pin_valid(p))
             || c.allowed_client_sha256.iter().collect::<std::collections::BTreeSet<_>>().len() != c.allowed_client_sha256.len()
-            || [&c.server_chain,&c.server_key,&c.client_ca].iter().any(|p| !p.is_absolute()) {
+            || [&c.server_chain,&c.server_key,&c.client_ca].iter().any(|p| !p.is_absolute())
+            || c.client_crl.as_ref().is_some_and(|p| !p.is_absolute()) {
             return Err("Bind, path absolut atau pin TLS tidak valid.".into());
         }
         Ok(c)
@@ -133,7 +136,7 @@ pub fn tls(path: &Path, expected: &TlsConfig) -> Result<Report> {
     let actual = TlsConfig::read(path)?;
     if actual.bind != expected.bind || actual.allowed_client_sha256 != expected.allowed_client_sha256
         || actual.server_chain != expected.server_chain || actual.server_key != expected.server_key
-        || actual.client_ca != expected.client_ca { return Err("Konfigurasi TLS berubah; batalkan.".into()); }
+        || actual.client_ca != expected.client_ca || actual.client_crl != expected.client_crl { return Err("Konfigurasi TLS berubah; batalkan.".into()); }
     // Pass the exact confirmed configuration rather than a mutable file path.
     // The certificate/key files still require OS ACL protection.
     let mut payload = SecretBytes(Vec::with_capacity(16_384));

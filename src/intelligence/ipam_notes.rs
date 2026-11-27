@@ -347,6 +347,26 @@ pub fn recover(source: &Path, destination: &Path) -> Result<()> {
     })
 }
 
+/// Read an exact scope/CIDR revision page; never infer assignment or mutate.
+pub fn history(path: &Path, scope: &str, prefix: &str, before: Option<i64>) -> Result<Vec<Note>> {
+    if scope.is_empty() || !valid_text(scope,160) || cidr(prefix).as_deref()!=Some(prefix)
+        || before.is_some_and(|r| !(1..=16385).contains(&r)) {
+        return Err("Key atau cursor histori IPAM tidak valid.".into());
+    }
+    if !path.try_exists().map_err(error)? { return Ok(Vec::new()); }
+    let conn=open(path,false)?;
+    let mut stmt=conn.prepare("SELECT scope,cidr,revision,recorded,active,reserved,alias,tags,note FROM ipam_revision WHERE scope=?1 AND cidr=?2 AND revision<?3 ORDER BY revision DESC LIMIT 25").map_err(error)?;
+    let rows=stmt.query_map(params![scope,prefix,before.unwrap_or(16385)],read_row).map_err(error)?
+        .collect::<std::result::Result<Vec<_>,_>>().map_err(error)?;
+    for row in &rows {
+        row.validate()?;
+        if row.scope!=scope || row.cidr!=prefix || !(1..=16384).contains(&row.revision) || row.recorded<0 {
+            return Err("Identitas histori IPAM tidak valid.".into());
+        }
+    }
+    Ok(rows)
+}
+
 pub fn save(path: &Path, note: &Note, expected: i64, now: u64) -> Result<()> {
     let mut conn = open(path, true)?;
     let tx = conn
@@ -398,6 +418,30 @@ pub fn undo(path: &Path, current: &Note, now: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn revision_history_is_exact_and_cursor_is_exclusive() {
+        let dir=std::env::temp_dir().join(format!("wenet-ipam-page-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let path=dir.join("notes.sqlite3");
+        let mut note=Note::parse("blue|192.0.2.0/24|label|router||").unwrap();
+        for rev in 0..30 {
+            note.alias=format!("rev{rev}");
+            save(&path,&note,rev,100+rev as u64).unwrap();
+        }
+        let other=Note::parse("red|192.0.2.0/24|reserved|||").unwrap();
+        save(&path,&other,0,100).unwrap();
+        let first=history(&path,"blue","192.0.2.0/24",None).unwrap();
+        assert_eq!(first.len(),25);
+        assert_eq!(first[0].revision,30);
+        let second=history(&path,"blue","192.0.2.0/24",Some(first[24].revision)).unwrap();
+        assert_eq!(second.len(),5);
+        assert_eq!(second[0].revision,5);
+        assert_eq!(second[4].revision,1);
+        assert_eq!(history(&path,"red","192.0.2.0/24",None).unwrap().len(),1);
+        assert!(history(&path,"blue","192.0.2.1/24",None).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 
     #[test]
     fn parse_requires_canonical_network_and_explicit_scope() {

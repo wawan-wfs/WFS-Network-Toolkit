@@ -33,3 +33,6 @@ The desktop can now request syslog-tls-collect --confirm with the confirmed JSON
 ## Extended collection and transactional monitoring
 
 Collector now admits at most four concurrent connections, 1024 total, and 30 minutes per explicitly authorized run. Rejected connections emit a separate identity-free coarse event (not an authenticated observation). The desktop stores each event and uses separate counters. SNMP success and attempt are atomically committed in secure observation DB schema v2; the older independent attempts file remains readable. No permanent service, no auto-restart, no claims of interoperability or runtime acceptance. For certificate rotation, stop the session, update protected key/cert/CA/pin files, and explicitly confirm a new session; active config never hot-reloads.
+
+### Certificate revocation
+Optional absolute `client_crl` PEM path is loaded once per explicit session. Rustls checks chain revocation and CRL nextUpdate; missing/unknown status is denied when CRLs are configured. Without a CRL, CA and exact leaf pin remain mandatory but CRL revocation is not checked. Rotation requires stop, protected file update and new authorization. Not an automated certificate lifecycle. Real positive, revoked, expired and missing-CRL cases remain acceptance requirements.
